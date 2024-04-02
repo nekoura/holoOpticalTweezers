@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-import getopt
+import argparse
 import logging
 import colorlog
 import cv2
@@ -25,48 +25,34 @@ class Utils:
         :return: (终端日志级别, 文件日志级别, 日志是否写入文件)
         :rtype: tuple
         """
-        cloglvl = 30
-        floglvl = 10
-        writelogfile = False
-        try:
-            opts, args = getopt.getopt(
-                sys.argv[1:],
-                'hc:f:v',
-                ['help', 'cloglvl=', 'floglvl=', 'version']
-            )
-        except Exception as err:
-            print(f"{err}\n")
-            print(f"Usage:")
-            print(f"calcHoloGUI.py [-c <loglevel>] [-f <loglevel>]")
-            print(f"calcHoloGUI.py [--cloglvl=<loglevel>] [--floglvl=<loglevel>]\n")
-            print(f"Type 'calcHoloGUI.py -h' or 'calcHoloGUI.py --help' for details.\n")
-            sys.exit(-1)
-        else:
-            for opt_name, opt_value in opts:
-                if opt_name in ('-h', '--help'):
-                    print(f"Usage:")
-                    print(f"calcHoloGUI.py [-c <loglevel>] [-f <loglevel>] [-w]")
-                    print(f"calcHoloGUI.py [--cloglvl=<loglevel>] [--floglvl=<loglevel>] [--writelogfile]\n")
-                    print(f"Commands:")
-                    print(f"-c, --cloglvl=\t\t Set console log level")
-                    print(f"-f, --floglvl=\t\t Set logfile log level and enable logfile")
-                    print(f"\tloglevel:")
-                    print(f"\t10\t DEBUG (default for logfile)")
-                    print(f"\t20\t INFO")
-                    print(f"\t30\t WARNING (default for console)")
-                    print(f"\t40\t ERROR")
-                    print(f"\t50\t FATAL")
-                    sys.exit(0)
-                if opt_name in ('-v', '--version'):
-                    print("v0.1 build240318")
-                    sys.exit(0)
-                if opt_name in ('-c', '--cloglvl'):
-                    cloglvl = int(opt_value)
-                if opt_name in ('-f', '--floglvl'):
-                    writelogfile = True
-                    floglvl = int(opt_value)
+        parser = argparse.ArgumentParser(
+            prog='calcHoloGUI',  # 程序名
+            description='SLM Holograph Generator',  # 描述
+            epilog=f'\tloglevel:\n'
+                   f'\t10\t DEBUG\n'
+                   f'\t20\t INFO\n'
+                   f'\t30\t WARNING (default for console)\n'
+                   f'\t40\t ERROR\n'
+                   f'\t50\t FATAL',  # 说明信息
+            formatter_class=argparse.RawTextHelpFormatter
+        )
+        parser.add_argument(
+            '-c', '--cloglvl', default=30, type=int,
+            choices=(10, 20, 30, 40, 50),
+            required=False, help='Set console log level'
+        )
+        parser.add_argument(
+            '-f', '--floglvl', default=-1, type=int,
+            choices=(10, 20, 30, 40, 50),
+            required=False, help='Set logfile log level and enable logfile'
+        )
+        parser.add_argument(
+            '-d', '--autodetect', default=False, action='store_true',
+            required=False, help='Auto detect LCOS monitor'
+        )
 
-        return cloglvl, floglvl, writelogfile
+        args = parser.parse_args()
+        return args
 
     @staticmethod
     def folderPathCheck(path):
@@ -130,6 +116,7 @@ class Utils:
                 )
             )
             logger.addHandler(logFileHandler)
+            logger.info(f"log will print to file '../log/log_{time.strftime('%Y%m%d%H%M%S')}.txt'")
 
         return logger
 

@@ -1,6 +1,6 @@
 import sys
-import time
 import ctypes
+import time
 import serial
 from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
 
         camPreviewLayout = QHBoxLayout()
         camPreviewLayout.addWidget(self.camPreview)
-        
+
         camPreviewGroupBox = QGroupBox("相机预览")
         camPreviewGroupBox.setLayout(camPreviewLayout)
 
@@ -427,7 +427,7 @@ class MainWindow(QMainWindow):
         if self.cam.device:
             self.cam.device.Snap(self.cam.RESOLUTION)
 
-            logHandler.debug(f"Snap Signal send. Initiator=User")
+            logHandler.debug(f"Snap Signal send. Initiator=User Mode=save")
 
     def snapFromCam(self):
         """
@@ -437,7 +437,7 @@ class MainWindow(QMainWindow):
             self._snapAsTarget = True
             self.cam.device.Snap(self.cam.RESOLUTION)
 
-            logHandler.debug(f"Snap Signal send. Initiator=User (as target)")
+            logHandler.debug(f"Snap Signal send. Initiator=User Mode=target)")
 
     def openTargetImg(self):
         """
@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
                     logHandler.error(f"Fail to load image: I/O Error")
 
             self.imgLoadedEvent(imgDir, None)
-            
+
     def openHoloImg(self):
         """
         [UI操作] 点击载入已有图像
@@ -492,7 +492,7 @@ class MainWindow(QMainWindow):
                 logHandler.error(f"Fail to save image: {err}")
             else:
                 if imgDir is not None and imgDir != '':
-                    cv2.imwrite(imgDir, self.holoImg)
+                    cv2.imencode(imgType, self.holoImg)[1].tofile(imgDir)
                     self.statusBar.showMessage(f"保存成功。图片位于{imgDir}")
                     logHandler.info(f"Holo image saved at {imgDir}")
 
@@ -624,7 +624,6 @@ class MainWindow(QMainWindow):
             self.saveHoloBtn.setEnabled(True)
         else:
             self.saveHoloBtn.setEnabled(False)
-
 
     def frameRefreshEvent(self):
         """
@@ -759,6 +758,7 @@ class SecondMonitorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        self._selMonIndex = None
         self._initUI()
 
     def _initUI(self):
@@ -799,63 +799,105 @@ class SecondMonitorWindow(QMainWindow):
         [UI事件] 检测显示器
         """
         screens = QGuiApplication.screens()
-        screenCnt = len(screens)
 
-        if screenCnt > 1:
-            # 创建对话框
-            dialog = QDialog(self)
-            dialog.setWindowTitle("选择 SLM 所在显示器")
-            dialog.setModal(True)
-
-            self.scrSel = QComboBox(self)
-
-            logHandler.info(f"Detected Monitor(s):")
-            for i in range(screenCnt):
-                scrWid = screens[i].size().width()
-                scrHei = screens[i].size().height()
-                scrScale = screens[i].devicePixelRatio()
-                scrRes = f"{round(scrWid * scrScale)}x{round(scrHei * scrScale)}"
-                scrRefreshRate = round(screens[i].refreshRate())
-                logHandler.info(f"{i} - {screens[i].name()} {scrRes}@{scrRefreshRate}Hz")
-                self.scrSel.addItem(f"{screens[i].name()} - {scrRes}@{scrRefreshRate}Hz")
-
-            selBtn = QPushButton('确定', self)
-            selBtn.clicked.connect(dialog.accept)
-            selBtn.setStyleSheet("height: 24px")
-
-            dialogLayout = QVBoxLayout()
-            dialogLayout.addWidget(self.scrSel)
-            dialogLayout.addWidget(selBtn)
-
-            dialog.setLayout(dialogLayout)
-
-            result = dialog.exec()
-            if result == 1:
-                # 获取选择的显示器
-                selScrIndex = self.scrSel.currentIndex()
-                selectedMon = screens[selScrIndex]
-                # 设置副屏窗体位置
-                self.setGeometry(selectedMon.geometry().x(), selectedMon.geometry().y(),
-                                 selectedMon.size().width(), selectedMon.size().height())
-                logHandler.info(f"Monitor {selScrIndex} selected.")
-
-                dialog.accept()
+        if len(screens) > 1:
+            autodetect = any(arg == '-d' or arg == '--autodetect' for arg in sys.argv[1:])
+            if autodetect:
+                for index, screen in enumerate(screens):
+                    if 'JDC EDK' in screen.name():
+                        scrWid = screen.size().width()
+                        scrHei = screen.size().height()
+                        scrScale = screen.devicePixelRatio()
+                        scrRes = f"{round(scrWid * scrScale)}x{round(scrHei * scrScale)}"
+                        scrRefreshRate = round(screen.refreshRate())
+                        logHandler.info(
+                            f"JDC EDK Detected: Monitor {index} - {scrRes}@{scrRefreshRate}Hz"
+                        )
+                        self._selMonIndex = index
+                        break
+                else:
+                    QMessageBox.critical(
+                        self,
+                        '错误',
+                        f'未检测到名为 "JDC EDK" 的LCOS硬件。\n'
+                        f'请重新连接SLM，确认电源已打开，或在显示设置中确认配置正确。'
+                    )
+                    logHandler.error(
+                        f"No LCOS named 'JDC EDK' Detected. "
+                        f"Check your connection, power status or screen configuration."
+                    )
+                    sys.exit()
             else:
-                sys.exit()
+                self.monitorDetectionUI(screens)
+
+            selectedMon = screens[self._selMonIndex]
+            self.setGeometry(selectedMon.geometry().x(), selectedMon.geometry().y(),
+                             selectedMon.size().width(), selectedMon.size().height())
+            logHandler.info(f"Monitor {self._selMonIndex} selected.")
 
         else:
             QMessageBox.critical(
-                self, '错误', '未检测到多显示器。\n请重新连接SLM，或在显示设置中确认配置正确。'
+                self,
+                '错误',
+                f'未检测到多显示器。\n'
+                f'请重新连接SLM，，确认电源已打开，或在显示设置中确认配置正确。'
             )
             logHandler.error(
-                f"No Multi-monitors Detected. Check your connection or screen configuration."
+                f"No Multi-monitors Detected. "
+                f"Check your connection, power status or screen configuration."
             )
+            sys.exit()
+
+    def monitorDetectionUI(self, screens):
+        """
+        [UI操作] 手动选择显示器
+        """
+        # 创建对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择 SLM 所在显示器")
+        dialog.setModal(True)
+
+        scrSel = QComboBox()
+
+        logHandler.info(f"Detected Monitor(s):")
+        # 枚举显示器
+        for index, screen in enumerate(screens):
+            scrWid = screen.size().width()
+            scrHei = screen.size().height()
+            scrScale = screen.devicePixelRatio()
+            scrRes = f"{round(scrWid * scrScale)}x{round(scrHei * scrScale)}"
+            scrRefreshRate = round(screen.refreshRate())
+
+            logHandler.info(f"{index} - {screen.name()} {scrRes}@{scrRefreshRate}Hz")
+            scrSel.addItem(f"{screen.name()} - {scrRes}@{scrRefreshRate}Hz")
+
+        selBtn = QPushButton('确定')
+        selBtn.clicked.connect(dialog.accept)
+        selBtn.setStyleSheet("height: 24px")
+
+        dialogLayout = QVBoxLayout()
+        dialogLayout.addWidget(scrSel)
+        dialogLayout.addWidget(selBtn)
+
+        dialog.setLayout(dialogLayout)
+
+        result = dialog.exec()
+        # 确认
+        if result == 1:
+            self._selMonIndex = scrSel.currentIndex()
+        # 点x
+        else:
             sys.exit()
 
 
 if __name__ == '__main__':
-    cloglvl, floglvl, writelogfile = Utils().getCmdOpt()
-    logHandler = Utils().getLog(consoleLevel=cloglvl, fileLevel=floglvl, writeLogFile=writelogfile)
+    args = Utils().getCmdOpt()
+
+    logHandler = Utils().getLog(
+        consoleLevel=args.cloglvl,
+        fileLevel=args.floglvl,
+        writeLogFile=(args.floglvl > 0)
+    )
 
     app = QApplication(sys.argv)
     qInstallMessageHandler(exception_handler)
