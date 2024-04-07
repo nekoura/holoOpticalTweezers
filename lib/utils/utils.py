@@ -1,4 +1,3 @@
-import os
 import sys
 import time
 import argparse
@@ -6,6 +5,7 @@ import logging
 import colorlog
 import cv2
 import numpy as np
+from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap
 
@@ -18,7 +18,7 @@ class Utils:
         super().__init__()
 
     @staticmethod
-    def getCmdOpt():
+    def getCmdOpt() -> object:
         """
         [工具类] 处理命令行参数
 
@@ -63,11 +63,11 @@ class Utils:
         :return: 输出路径
         :rtype: str
         """
-        pathPrefix = os.path.split(path)[0]
-        if os.path.exists(pathPrefix):
+        parent = Path(path).parent
+        if Path(parent).exists:
             pass
         else:
-            os.makedirs(pathPrefix)
+            Path.mkdir(parent)
 
         return path
 
@@ -160,13 +160,13 @@ class Utils:
                 rows, columns = inputImg.shape
                 bytesPerLine = columns
                 img = QImage(
-                    inputImg.data, columns, rows, bytesPerLine, QImage.Format.Format_Indexed8
+                    inputImg.copy(), columns, rows, bytesPerLine, QImage.Format.Format_Indexed8
                 )
             else:
                 rows, columns, channels = inputImg.shape
                 bytesPerLine = channels * columns
                 img = QImage(
-                    inputImg.data, columns, rows, bytesPerLine, QImage.Format.Format_RGB888
+                    inputImg.copy(), columns, rows, bytesPerLine, QImage.Format.Format_RGB888
                 ).rgbSwapped()
 
             pixmap = QPixmap(img)

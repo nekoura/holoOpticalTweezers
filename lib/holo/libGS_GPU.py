@@ -4,47 +4,14 @@
 import cupy as cp
 
 
-def addWeight(weightedU, target, targetU, normIntensity):
-    """
-    向迭代光场添加权重(See Eq.19)
-
-    :param weightedU: 迭代前(step k-1)加权光场强度
-    :param target: 目标图像
-    :param targetU: 目标光场
-    :param normIntensity: 归一化光强
-    :return: 迭代后(step k)加权光场强度
-    """
-    weightedU[target == 1] = ((target[target == 1] / normIntensity[target == 1]) ** 0.5) * targetU[target == 1]
-    return weightedU
-
-
-def uniformityCalc(intensity, target):
-    """
-    均匀性评价，达到一定值后终止迭代(See Eq.4-2)
-
-    :param intensity: 输入光场强度
-    :param target: 目标图像
-    :return 均匀性
-    :rtype: float
-    """
-    intensity = intensity / cp.max(intensity)
-
-    maxI = cp.max(intensity[target == 1])
-    minI = cp.min(intensity[target == 1])
-
-    uniformity = float(1 - (maxI - minI) / (maxI + minI))
-
-    return uniformity
-
-
-def GSiteration(maxIterNum: int, uniThres: float, targetImg, unfmList: list):
+def GSiteration(maxIterNum: int, uniThres: float, targetImg, uniList: list, effiList: list) -> tuple:
     """
     GS迭代算法
 
-    :param int maxIterNum: 最大迭代次数
-    :param float uniThres: 迭代目标（均匀性）
+    :param maxIterNum: 最大迭代次数
+    :param uniThres: 迭代目标（均匀性）
     :param targetImg: 目标图像
-    :param list unfmList: 均匀性记录
+    :param uniList: 均匀性记录
     :return: 相位, 归一化光强
     :rtype: tuple
     """
@@ -60,13 +27,14 @@ def GSiteration(maxIterNum: int, uniThres: float, targetImg, unfmList: list):
     # todo:高斯面型
     phase = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
 
-    # 光场复振幅：生成和target相同尺寸的空数组，必须是负数
+    # 光场复振幅：生成和target相同尺寸的空数组，必须是复数
     u = cp.empty_like(targetImg, dtype="complex")
 
     # 初始化光场
-    targetU = targetImg
+    uTarget = targetImg
     # 初始化权重数组
-    weightedU = cp.empty_like(targetImg)
+    uWeighted = cp.empty_like(targetImg)
+    normIntensity = cp.empty_like(targetImg)
 
     for n in range(maxIterNum):
         # 输入到LCOS上的复振幅光场，设入射LCOS的初始光强相对值为1，N=1为随机相位，N>1为迭代相位
@@ -87,14 +55,18 @@ def GSiteration(maxIterNum: int, uniThres: float, targetImg, unfmList: list):
 
         # 检查生成光场的均匀度
         uniformity = uniformityCalc(intensity, targetImg)
-        unfmList.append(uniformity)
+        uniList.append(uniformity)
 
-        weightedU = addWeight(weightedU, targetImg, targetU, normIntensity)
-        weightedU = normalize(weightedU)
-        targetU = weightedU
+        # 检查生成光场的光能利用率
+        efficiency = efficiencyCalc(normIntensity, targetImg)
+        effiList.append(efficiency)
 
-        u.real = weightedU * cp.cos(phase)
-        u.imag = weightedU * cp.sin(phase)
+        uWeighted = addWeight(uWeighted, targetImg, uTarget, normIntensity)
+        uWeighted = normalize(uWeighted)
+        uTarget = uWeighted
+
+        u.real = uWeighted * cp.cos(phase)
+        u.imag = uWeighted * cp.sin(phase)
 
         # 模拟透镜传递函数（向LCOS反向传播）
         u = cp.fft.ifftshift(u)
@@ -106,20 +78,69 @@ def GSiteration(maxIterNum: int, uniThres: float, targetImg, unfmList: list):
         # if uniformity >= uniThres:
         #     break
 
-    return (phase, normIntensity)
+    # 显存GC
+    cp._default_memory_pool.free_all_blocks()
+
+    return u, phase, normIntensity
 
 
-# 归一化
+def addWeight(uWeighted, target, uTarget, normIntensity):
+    """
+    向迭代光场添加权重(See Eq.19)
+
+    :param uWeighted: 迭代前(step k-1)加权光场强度
+    :param target: 目标图像
+    :param uTarget: 目标光场
+    :param normIntensity: 归一化光强
+    :return: 迭代后(step k)加权光场强度
+    """
+    uWeighted[target == 1] = ((target[target == 1] / normIntensity[target == 1]) ** 0.5) * uTarget[target == 1]
+    return uWeighted
+
+
+def uniformityCalc(intensity, target) -> float:
+    """
+    均匀性评价，达到一定值后终止迭代(See Eq.4-2)
+
+    :param intensity: 输入光场强度
+    :param target: 目标图像
+    :return 均匀性
+    :rtype: float
+    """
+    intensity = intensity / cp.max(intensity)
+
+    maxI = cp.max(intensity[target == 1])
+    minI = cp.min(intensity[target == 1])
+
+    uniformity = float(1 - (maxI - minI) / (maxI + minI))
+
+    return uniformity
+
+
+def efficiencyCalc(normIntensity, target) -> float:
+    """
+    光场利用率评价
+
+    :param normIntensity: 归一化光场强度
+    :param target: 目标图像
+    :return 光场利用率
+    :rtype: float
+    """
+    efficiency = cp.sum(normIntensity[target == 1]) / cp.sum(target[target == 1])
+
+    return efficiency
+
+
 def normalize(img):
-    maxI = cp.max(img)
-    minI = cp.min(img)
+    """
+    归一化
 
-    result = ((img - minI) / (maxI - minI))
+    :param img: 输入图像
+    :return: 归一化图像
+    """
+    return (img - cp.min(img)) / (cp.max(img) - cp.min(img))
 
-    return result
 
-
-# 生成全息图
 def genHologram(phase):
     """
     自相位生成全息图
@@ -134,3 +155,24 @@ def genHologram(phase):
     return holo
 
 
+def reconstruct(holoU, d, wavelength):
+    """
+    重建光场还原
+
+    :param holoU: 全息图光场
+    :param d: 衍射距离
+    :param wavelength: 光源波长
+    :return: 重建光场
+    """
+    k = 2 * cp.pi / wavelength
+    H = cp.exp(1j * (k * d / wavelength))
+    uFFT = cp.fft.fftshift(
+        cp.fft.fft2(
+            cp.fft.fftshift(
+                cp.asarray(holoU)
+            )
+        )
+    )
+    uAbs = cp.abs(H * uFFT)
+    uReconstruct = normalize(uAbs) * 255
+    return cp.asnumpy(uReconstruct)

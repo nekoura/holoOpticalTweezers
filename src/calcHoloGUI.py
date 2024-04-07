@@ -2,24 +2,27 @@ import sys
 import ctypes
 import time
 import serial
-from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, qInstallMessageHandler
-from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
-    QGridLayout, QVBoxLayout, QHBoxLayout, \
-    QDialog, QFileDialog, QMessageBox, \
-    QGroupBox, QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
 import cv2
 import cupy as cp
 import numpy as np
+from pathlib import Path
+from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, qInstallMessageHandler
+from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
+    QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
+    QDialog, QFileDialog, QMessageBox, \
+    QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from lib.utils.utils import Utils
 from lib.holo import libGS_GPU as libGS
 from lib.cam.camAPI import CameraMiddleware
 from lib.laser.laserAPI import LaserMiddleWare
 
 
-def exception_handler(type, value, traceback):
+def exception_handler(errtype, value, traceback):
     # 捕获异步异常并显示错误消息
-    QMessageBox.critical(None, 'Error', f"{type}\n{value}\n{traceback}")
+    QMessageBox.critical(None, 'Error', f"{errtype}\n{value}\n{traceback}")
 
 
 class MainWindow(QMainWindow):
@@ -28,7 +31,8 @@ class MainWindow(QMainWindow):
 
     :var pendingImg: 预处理前的图像
     :var targetImg: 全息图目标图像
-    :var holoImg: 全息图
+    :var holoU: 全息图复光场
+    :var holoImg: 全息图(相位项转位图)
     :var holoImgRotated: 针对LCOS旋转方向的全息图
     """
     holoImgReady = pyqtSignal(object)
@@ -39,10 +43,13 @@ class MainWindow(QMainWindow):
         self.pendingImg = None
         self.targetImg = None
         self.holoImg = None
+        self.holoU = None
         self.holoImgRotated = None
         self._isBinarized = False
         self._snapAsTarget = False
         self.binarizedImg = None
+        self._uniList = []
+        self._effiList = []
 
         # 相机实例通信
         self.cam = CameraMiddleware()
@@ -85,6 +92,68 @@ class MainWindow(QMainWindow):
         # self.binarizeImgBtn.clicked.connect(self.onBinarizeImgBtnClicked)
         # self.binarizeImgBtn.setEnabled(False)
 
+        # 输入功能区
+        self.snapFromCamBtn = QPushButton('从相机捕获')
+        self.snapFromCamBtn.clicked.connect(self.snapFromCam)
+        self.snapFromCamBtn.setEnabled(False)
+
+        openTargetFileBtn = QPushButton('载入目标图...')
+        openTargetFileBtn.clicked.connect(self.openTargetImg)
+
+        openHoloFileBtn = QPushButton('载入已有全息图...')
+        openHoloFileBtn.clicked.connect(self.openHoloImg)
+
+        inputTipsText = QLabel("欲载入已有全息图，相同目录下需存在保存全息图时生成的同名.npy文件")
+        inputTipsText.setStyleSheet("color:#999")
+        inputTipsText.setWordWrap(True)
+
+        inputImgLayout = QGridLayout()
+        inputImgLayout.addWidget(self.snapFromCamBtn, 0, 0, 1, 1)
+        inputImgLayout.addWidget(openTargetFileBtn, 0, 1, 1, 1)
+        inputImgLayout.addWidget(openHoloFileBtn, 1, 0, 1, 2)
+        inputImgLayout.addWidget(inputTipsText, 2, 0, 1, 2)
+        inputImgLayout.setColumnStretch(0, 1)
+        inputImgLayout.setColumnStretch(1, 1)
+
+        inputImgGroupBox = QGroupBox("输入")
+        inputImgGroupBox.setLayout(inputImgLayout)
+
+        # 全息图计算功能区
+        maxIterNumText = QLabel("最大迭代次数")
+
+        self.maxIterNumInput = QSpinBox()
+        self.maxIterNumInput.setRange(0, 10000)
+        self.maxIterNumInput.setValue(100)
+        self.maxIterNumInput.setEnabled(False)
+
+        uniThresNumText = QLabel("均匀度阈值")
+
+        self.uniThresNumInput = QDoubleSpinBox()
+        self.uniThresNumInput.setRange(0, 1)
+        self.uniThresNumInput.setValue(0.95)
+        self.uniThresNumInput.setEnabled(False)
+
+        self.calcHoloBtn = QPushButton('计算全息图')
+        self.calcHoloBtn.clicked.connect(self.calcHoloImg)
+        self.calcHoloBtn.setEnabled(False)
+
+        self.saveHoloBtn = QPushButton('保存全息图...')
+        self.saveHoloBtn.clicked.connect(self.saveHoloImg)
+        self.saveHoloBtn.setEnabled(False)
+
+        calHoloLayout = QGridLayout()
+        calHoloLayout.addWidget(maxIterNumText, 0, 0, 1, 1)
+        calHoloLayout.addWidget(uniThresNumText, 0, 1, 1, 1)
+        calHoloLayout.addWidget(self.maxIterNumInput, 1, 0, 1, 1)
+        calHoloLayout.addWidget(self.uniThresNumInput, 1, 1, 1, 1)
+        calHoloLayout.addWidget(self.calcHoloBtn, 2, 0, 1, 1)
+        calHoloLayout.addWidget(self.saveHoloBtn, 2, 1, 1, 1)
+        calHoloLayout.setColumnStretch(0, 1)
+        calHoloLayout.setColumnStretch(1, 1)
+
+        calHoloGroupBox = QGroupBox("全息图计算")
+        calHoloGroupBox.setLayout(calHoloLayout)
+
         # 相机功能区
         self.toggleCamBtn = QPushButton('打开相机')
         self.toggleCamBtn.clicked.connect(self.toggleCam)
@@ -110,19 +179,14 @@ class MainWindow(QMainWindow):
         autoExpLayout.addSpacing(10)
         autoExpLayout.addWidget(self.autoExpChk, 0, Qt.AlignmentFlag.AlignRight)
 
-        expTimeSetLayout = QGridLayout()
-        expTimeSetLayout.addWidget(expTimeText, 0, 0, 2, 1)
-        expTimeSetLayout.addWidget(self.expTimeInput, 1, 0, 1, 1)
-        expTimeSetLayout.addLayout(autoExpLayout, 1, 1, 1, 1)
-        expTimeSetLayout.setVerticalSpacing(0)
-        expTimeSetLayout.setColumnStretch(0, 1)
-        expTimeSetLayout.setColumnStretch(1, 1)
-
-        camCtrlLayout = QVBoxLayout()
-        camCtrlLayout.addWidget(self.toggleCamBtn)
-        camCtrlLayout.addWidget(self.snapBtn)
-        camCtrlLayout.addWidget(expTimeText)
-        camCtrlLayout.addLayout(expTimeSetLayout)
+        camCtrlLayout = QGridLayout()
+        camCtrlLayout.addWidget(self.toggleCamBtn, 0, 0, 1, 1)
+        camCtrlLayout.addWidget(self.snapBtn, 0, 1, 1, 1)
+        camCtrlLayout.addWidget(expTimeText, 1, 0, 1, 2)
+        camCtrlLayout.addWidget(self.expTimeInput, 2, 0, 1, 1)
+        camCtrlLayout.addLayout(autoExpLayout, 2, 1, 1, 1)
+        camCtrlLayout.setColumnStretch(0, 1)
+        camCtrlLayout.setColumnStretch(1, 1)
 
         camCtrlGroupBox = QGroupBox("相机设置")
         camCtrlGroupBox.setLayout(camCtrlLayout)
@@ -130,8 +194,12 @@ class MainWindow(QMainWindow):
         # 激光器功能区
         self.laserPortSel = QComboBox()
 
-        self.connectLaserBtn = QPushButton('连接激光器')
+        self.connectLaserBtn = QPushButton('连接控制盒')
         self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
+
+        self.toggleLaserBtn = QPushButton('启动激光')
+        self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
+        self.toggleLaserBtn.setEnabled(False)
 
         laserPwrText = QLabel("激光功率 (mW)")
 
@@ -144,99 +212,32 @@ class MainWindow(QMainWindow):
         self.setLaserPwrBtn.clicked.connect(self.setLaserPwr)
         self.setLaserPwrBtn.setEnabled(False)
 
-        laserPwrSetLayout = QGridLayout()
-        laserPwrSetLayout.addWidget(laserPwrText, 0, 0, 2, 1)
-        laserPwrSetLayout.addWidget(self.laserPwrInput, 1, 0, 1, 1)
-        laserPwrSetLayout.addWidget(self.setLaserPwrBtn, 1, 1, 1, 1)
-        laserPwrSetLayout.setVerticalSpacing(0)
-        laserPwrSetLayout.setColumnStretch(0, 1)
-        laserPwrSetLayout.setColumnStretch(1, 1)
-
-        self.toggleLaserBtn = QPushButton('启动激光')
-        self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
-        self.toggleLaserBtn.setStyleSheet("height: 36px; font-size: 18px")
-        self.toggleLaserBtn.setEnabled(False)
-
-        laserCtrlLayout = QVBoxLayout()
-        laserCtrlLayout.addWidget(self.laserPortSel)
-        laserCtrlLayout.addWidget(self.connectLaserBtn)
-        laserCtrlLayout.addWidget(laserPwrText)
-        laserCtrlLayout.addLayout(laserPwrSetLayout)
-        laserCtrlLayout.addWidget(self.toggleLaserBtn)
+        laserCtrlLayout = QGridLayout()
+        laserCtrlLayout.addWidget(self.laserPortSel, 0, 0, 1, 2)
+        laserCtrlLayout.addWidget(self.connectLaserBtn, 1, 0, 1, 1)
+        laserCtrlLayout.addWidget(self.toggleLaserBtn, 1, 1, 1, 1)
+        laserCtrlLayout.addWidget(laserPwrText, 2, 0, 1, 2)
+        laserCtrlLayout.addWidget(self.laserPwrInput, 3, 0, 1, 1)
+        laserCtrlLayout.addWidget(self.setLaserPwrBtn, 3, 1, 1, 1)
+        laserCtrlLayout.setColumnStretch(0, 1)
+        laserCtrlLayout.setColumnStretch(1, 1)
 
         laserCtrlGroupBox = QGroupBox("激光器设置")
         laserCtrlGroupBox.setLayout(laserCtrlLayout)
 
-        # 输入功能区
-        self.snapFromCamBtn = QPushButton('从相机捕获')
-        self.snapFromCamBtn.clicked.connect(self.snapFromCam)
-        self.snapFromCamBtn.setEnabled(False)
-
-        openTargetFileBtn = QPushButton('载入已有目标图...')
-        openTargetFileBtn.clicked.connect(self.openTargetImg)
-
-        openHoloFileBtn = QPushButton('载入已有全息图...')
-        openHoloFileBtn.clicked.connect(self.openHoloImg)
-
-        inputImgLayout = QVBoxLayout()
-        inputImgLayout.addWidget(self.snapFromCamBtn)
-        inputImgLayout.addWidget(openTargetFileBtn)
-        inputImgLayout.addWidget(openHoloFileBtn)
-
-        inputImgGroupBox = QGroupBox("输入")
-        inputImgGroupBox.setLayout(inputImgLayout)
-
-        # 全息图计算功能区
-        maxIterNumText = QLabel("最大迭代次数")
-
-        self.maxIterNumInput = QSpinBox()
-        self.maxIterNumInput.setRange(0, 10000)
-        self.maxIterNumInput.setValue(100)
-        self.maxIterNumInput.setEnabled(False)
-
-        uniThresNumText = QLabel("均匀度阈值")
-
-        self.uniThresNumInput = QDoubleSpinBox()
-        self.uniThresNumInput.setRange(0, 1)
-        self.uniThresNumInput.setValue(0.95)
-        self.uniThresNumInput.setEnabled(False)
-
-        holoSetLayout = QGridLayout()
-        holoSetLayout.addWidget(maxIterNumText, 0, 0, 1, 1)
-        holoSetLayout.addWidget(uniThresNumText, 0, 1, 1, 1)
-        holoSetLayout.addWidget(self.maxIterNumInput, 1, 0, 1, 1)
-        holoSetLayout.addWidget(self.uniThresNumInput, 1, 1, 1, 1)
-        holoSetLayout.setColumnStretch(0, 1)
-        holoSetLayout.setColumnStretch(1, 1)
-
-        self.calcHoloBtn = QPushButton('计算全息图')
-        self.calcHoloBtn.clicked.connect(self.calcHoloImg)
-        self.calcHoloBtn.setEnabled(False)
-
-        self.saveHoloBtn = QPushButton('保存全息图...')
-        self.saveHoloBtn.clicked.connect(self.saveHoloImg)
-        self.saveHoloBtn.setEnabled(False)
-
-        calHoloLayout = QVBoxLayout()
-        calHoloLayout.addLayout(holoSetLayout)
-        calHoloLayout.addWidget(self.calcHoloBtn)
-        calHoloLayout.addWidget(self.saveHoloBtn)
-
-        calHoloGroupBox = QGroupBox("全息图计算")
-        calHoloGroupBox.setLayout(calHoloLayout)
-
         ctrlAreaLayout = QVBoxLayout()
-        ctrlAreaLayout.addWidget(camCtrlGroupBox)
-        ctrlAreaLayout.addWidget(laserCtrlGroupBox)
-        ctrlAreaLayout.addStretch(1)
         ctrlAreaLayout.addWidget(inputImgGroupBox)
         ctrlAreaLayout.addWidget(calHoloGroupBox)
+        ctrlAreaLayout.addStretch(1)
+        ctrlAreaLayout.addWidget(camCtrlGroupBox)
+        ctrlAreaLayout.addWidget(laserCtrlGroupBox)
 
         ctrlArea = QWidget()
         ctrlArea.setObjectName("ctrlArea")
         ctrlArea.setLayout(ctrlAreaLayout)
 
         # ==== 显示区域 ====
+        # 相机预览区域
         self.camPreview = QLabel()
         self.camPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.camPreview.setText("点击 [打开相机] 以预览...")
@@ -251,32 +252,69 @@ class MainWindow(QMainWindow):
         # 目标图显示区域
         self.targetImgPreview = QLabel()
         self.targetImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.targetImgPreview.setText("从输入模块载入已有目标图/全息图 \n或打开相机后 [从相机捕获]")
-        self.targetImgPreview.setMinimumSize(360, 240)
+        self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
+        self.targetImgPreview.setMaximumSize(320, 320)
 
-        targetImgPreviewLayout = QHBoxLayout()
-        targetImgPreviewLayout.addWidget(self.targetImgPreview)
-
-        targetImgPreviewGroupBox = QGroupBox("目标图")
-        targetImgPreviewGroupBox.setLayout(targetImgPreviewLayout)
+        targetImgHLayout = QHBoxLayout()
+        targetImgHLayout.addWidget(self.targetImgPreview)
+        targetImgVLayout = QVBoxLayout()
+        targetImgVLayout.addLayout(targetImgHLayout)
+        targetImgWidget = QWidget()
+        targetImgWidget.setLayout(targetImgVLayout)
 
         # 全息图显示区域
         self.holoImgPreview = QLabel()
         self.holoImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.holoImgPreview.setMinimumSize(360, 240)
+        self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
+        self.holoImgPreview.setMaximumSize(320, 320)
 
-        holoImgPreviewLayout = QHBoxLayout()
-        holoImgPreviewLayout.addWidget(self.holoImgPreview)
+        holoImgHLayout = QHBoxLayout()
+        holoImgHLayout.addWidget(self.holoImgPreview)
+        holoImgVLayout = QVBoxLayout()
+        holoImgVLayout.addLayout(holoImgHLayout)
+        holoImgWidget = QWidget()
+        holoImgWidget.setLayout(holoImgVLayout)
 
-        holoImgPreviewGroupBox = QGroupBox("全息图")
-        holoImgPreviewGroupBox.setLayout(holoImgPreviewLayout)
+        self.holoImgPreviewTabWidget = QTabWidget()
+        self.holoImgPreviewTabWidget.addTab(targetImgWidget, "目标图")
+        self.holoImgPreviewTabWidget.addTab(holoImgWidget, "全息图")
+
+        # 重建光场仿真显示区域
+        self.reconstructImgPreview = QLabel()
+        self.reconstructImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
+        self.reconstructImgPreview.setMaximumSize(320, 320)
+
+        reconstructImgHLayout = QHBoxLayout()
+        reconstructImgHLayout.addWidget(self.reconstructImgPreview)
+        reconstructImgVLayout = QVBoxLayout()
+        reconstructImgVLayout.addLayout(reconstructImgHLayout)
+        reconstructImgWidget = QWidget()
+        reconstructImgWidget.setLayout(reconstructImgVLayout)
+
+        # 重建光场相位分布显示区域
+        self.reconstructPhase = Figure()
+        reconstructPhaseView = FigureCanvas(self.reconstructPhase)
+
+        # GS迭代历史显示区域
+        self.iterationHistory = Figure()
+        iterationHistoryView = FigureCanvas(self.iterationHistory)
+
+        self.reconstructViewTabWidget = QTabWidget()
+        self.reconstructViewTabWidget.addTab(reconstructImgWidget, "重建光场仿真")
+        self.reconstructViewTabWidget.addTab(reconstructPhaseView, "重建相位分布")
+        self.reconstructViewTabWidget.addTab(iterationHistoryView, "GS迭代历史")
+        self.reconstructViewTabWidget.setTabEnabled(1, False)
+        self.reconstructViewTabWidget.setTabEnabled(2, False)
 
         imgViewAreaLayout = QGridLayout()
         imgViewAreaLayout.addWidget(camPreviewGroupBox, 0, 1, 2, 1)
-        imgViewAreaLayout.addWidget(targetImgPreviewGroupBox, 0, 0, 1, 1)
-        imgViewAreaLayout.addWidget(holoImgPreviewGroupBox, 1, 0, 1, 1)
-        imgViewAreaLayout.setColumnStretch(0, 1)
+        imgViewAreaLayout.addWidget(self.holoImgPreviewTabWidget, 0, 0, 1, 1)
+        imgViewAreaLayout.addWidget(self.reconstructViewTabWidget, 1, 0, 1, 1)
+        imgViewAreaLayout.setColumnStretch(0, 2)
         imgViewAreaLayout.setColumnStretch(1, 5)
+        imgViewAreaLayout.setRowStretch(0, 1)
+        imgViewAreaLayout.setRowStretch(1, 1)
 
         imgViewArea = QWidget()
         imgViewArea.setObjectName("imgViewArea")
@@ -318,7 +356,7 @@ class MainWindow(QMainWindow):
             self.laser.device = None
             logHandler.info(f"Laser disconnected.")
             self.statusBar.showMessage(f"激光器已断开")
-            self.connectLaserBtn.setText('连接激光器')
+            self.connectLaserBtn.setText('连接控制盒')
         else:
             selLaserPortIndex = self.laserPortSel.currentIndex()
             if self.laser.portList is not None and selLaserPortIndex is not None:
@@ -329,15 +367,15 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(
                         self,
                         '错误',
-                        f'未能打开激光器。\n '
+                        f'未能打开激光器控制盒。\n '
                         f'详细信息：{err} \n'
                         f'请尝试重新连接USB线，并确认端口选择正确、驱动安装正确或未被其他程序占用。'
                     )
                     logHandler.error(f"Unable to open laser. {err}")
                 else:
                     logHandler.info(f"Laser connected. Device at {self.laser.port}.")
-                    self.statusBar.showMessage(f"激光器已连接 ({self.laser.port})")
-                    self.connectLaserBtn.setText('断开激光器')
+                    self.statusBar.showMessage(f"激光器控制盒已连接 ({self.laser.port})")
+                    self.connectLaserBtn.setText('断开控制盒')
 
         self.laserPortSel.setEnabled(not self.laserPortSel.isEnabled())
         self.toggleLaserBtn.setEnabled(not self.laserPortSel.isEnabled())
@@ -475,11 +513,19 @@ class MainWindow(QMainWindow):
             if imgDir is not None and imgDir != '':
                 try:
                     self.holoImg = Utils().loadImg(imgDir)
+                    self.holoU = np.load(f"{Path(imgDir).parent / Path(imgDir).stem}.npy")
                 except IOError:
-                    QMessageBox.critical(self, '错误', '文件打开失败')
-                    logHandler.error(f"Fail to load image: I/O Error")
-
-            self.imgLoadedEvent(None, imgDir)
+                    QMessageBox.critical(
+                        self, '错误', f'文件打开失败\n请确认文件可读，且目录中存在同名.npy文件'
+                    )
+                    logHandler.error(
+                        f"Fail to load image: I/O Error. "
+                        f"Please confirm that the file is readable, "
+                        f"and a .npy file with the same name exists in the directory."
+                    )
+                else:
+                    self.imgLoadedEvent(None, imgDir)
+                    logHandler.info(f"Light field {Path(imgDir).parent / Path(imgDir).stem}.npy loaded.")
 
     def saveHoloImg(self):
         if self.holoImg is not None:
@@ -493,7 +539,9 @@ class MainWindow(QMainWindow):
             else:
                 if imgDir is not None and imgDir != '':
                     cv2.imencode(imgType, self.holoImg)[1].tofile(imgDir)
-                    self.statusBar.showMessage(f"保存成功。图片位于{imgDir}")
+                    np.save(f"{Path(imgDir).stem}.npy", self.holoU)
+                    self.statusBar.showMessage(f"保存成功。图片位于{imgDir}，并在目录中存储了同名.npy文件。"
+                                               f"该文件包含光场信息，请与图像一同妥善保存，切勿更名。")
                     logHandler.info(f"Holo image saved at {imgDir}")
 
     def autoExpSet(self, state):
@@ -562,11 +610,10 @@ class MainWindow(QMainWindow):
             logHandler.info(f"Start Calculation.")
             self.statusBar.showMessage(f"开始计算...")
 
-            uniList = []
-            targetNormalized = self.targetImg / 255
-
             maxIterNum = self.maxIterNumInput.value()
             uniThres = self.uniThresNumInput.value()
+
+            targetNormalized = self.targetImg / 255
 
             # CuPy类型转换 (NumPy->CuPy)
             target = cp.asarray(targetNormalized)
@@ -574,7 +621,9 @@ class MainWindow(QMainWindow):
             # 计时
             tStart = time.time()
             try:
-                phase, normIntensity = libGS.GSiteration(maxIterNum, uniThres, target, uniList)
+                u, phase, normIntensity = libGS.GSiteration(
+                    maxIterNum, uniThres, target, self._uniList, self._effiList
+                )
             except Exception as err:
                 logHandler.error(f"Err in GSiteration: {err}")
                 QMessageBox.critical(self, '错误', f'GS迭代过程中发生异常：\n{err}')
@@ -584,6 +633,7 @@ class MainWindow(QMainWindow):
 
                 # CuPy类型转换 (CuPy->NumPy)
                 self.holoImg = cp.asnumpy(holo)
+                self.holoU = cp.asnumpy(u)
 
                 self.holoImgRotated = cv2.rotate(
                     cv2.flip(self.holoImg, 1),
@@ -592,20 +642,19 @@ class MainWindow(QMainWindow):
 
                 tEnd = time.time()
 
-                # 显存GC
-                cp._default_memory_pool.free_all_blocks()
-
                 # 在预览窗口显示计算好的全息图
                 Utils().cvImg2QPixmap(self.holoImgPreview, self.holoImg)
                 # 向副屏发送计算好的全息图
                 self.holoImgReady.emit(self.holoImgRotated)
                 logHandler.info(f"Image has been transferred to the second monitor.")
 
+                self.reconstructResult(self.holoU, 50, 532e-6)
+
                 # 性能估计
-                iteration = len(uniList)
+                iteration = len(self._uniList)
                 duration = round(tEnd - tStart, 2)
-                uniformity = uniList[-1]
-                efficiency = cp.sum(normIntensity[target == 1]) / cp.sum(target[target == 1])
+                uniformity = self._uniList[-1]
+                efficiency = self._effiList[-1]
 
                 logHandler.info(f"Finish Calculation.")
                 logHandler.info(
@@ -616,6 +665,8 @@ class MainWindow(QMainWindow):
                     f"计算完成。迭代{iteration}次，时长 {duration}s，"
                     f"均匀度{round(uniformity, 4)}，光场利用效率{cp.around(efficiency, 4)}"
                 )
+
+                self.holoImgPreviewTabWidget.setCurrentIndex(1)
         else:
             self.statusBar.showMessage(f"未载入目标图")
             logHandler.warning(f"No target image loaded. ")
@@ -663,9 +714,9 @@ class MainWindow(QMainWindow):
 
     def imgLoadedEvent(self, targetDir, holoDir):
         """
-        [UI事件] 载入目标图像后界面刷新
+        [UI事件] 载入图像后界面刷新
         """
-        if targetDir is not None and targetDir != '':
+        if targetDir is not None and targetDir != '':  # 载入目标图
             if self.pendingImg is not None:
                 imgRes = f"{self.pendingImg.shape[1]}x{self.pendingImg.shape[0]}"
                 logHandler.info(
@@ -673,54 +724,83 @@ class MainWindow(QMainWindow):
                 )
 
                 self.statusBar.showMessage(f"已加载图像{targetDir}，分辨率{imgRes}")
-                Utils().cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
                 self.holoImg = None
+                Utils().cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
                 Utils().cvImg2QPixmap(self.holoImgPreview, None)
+                Utils().cvImg2QPixmap(self.reconstructImgPreview, None)
+
+                self.holoImgPreviewTabWidget.setCurrentIndex(0)
+                self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
+                self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
 
                 self._isBinarized = False
-                # self.binarizeImgBtn.setText("二值化原图")
 
                 self.calcHoloBtn.setEnabled(True)
-                # self.binarizeImgBtn.setEnabled(True)
                 self.maxIterNumInput.setEnabled(True)
                 self.uniThresNumInput.setEnabled(True)
-            else:
-                self.calcHoloBtn.setEnabled(False)
-                # self.binarizeImgBtn.setEnabled(False)
-                self.maxIterNumInput.setEnabled(False)
-                self.uniThresNumInput.setEnabled(False)
+                self.reconstructViewTabWidget.setCurrentIndex(0)
+                self.reconstructViewTabWidget.setTabEnabled(1, False)
+                self.reconstructViewTabWidget.setTabEnabled(2, False)
 
             self.saveHoloBtn.setEnabled(False)
             logHandler.debug(f"UI thread updated. Initiator=User  Mode=refresh")
-        elif holoDir is not None and holoDir != '':
-            if self.holoImg is not None:
+        elif holoDir is not None and holoDir != '':  # 载入全息图
+            if self.holoImg is not None:  # 有全息图
                 imgRes = f"{self.holoImg.shape[1]}x{self.holoImg.shape[0]}"
                 logHandler.info(
-                    f"Image Loaded. Dir={holoDir}, Resolution={imgRes}"
+                    f"Image Loaded. Dir='{holoDir}', Resolution={imgRes}"
                 )
 
                 self.statusBar.showMessage(f"已加载图像{holoDir}，分辨率{imgRes}")
-                Utils().cvImg2QPixmap(self.targetImgPreview, None)
                 self.pendingImg = None
+                Utils().cvImg2QPixmap(self.targetImgPreview, None)
                 Utils().cvImg2QPixmap(self.holoImgPreview, self.holoImg)
+                self.reconstructResult(self.holoU, 50, 532e-6)
 
-                self.holoImgRotated = cv2.rotate(self.holoImg, cv2.ROTATE_90_CLOCKWISE)
+                self.holoImgPreviewTabWidget.setCurrentIndex(1)
+                self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
+
+                self.holoImgRotated = cv2.rotate(
+                    cv2.flip(self.holoImg, 1),
+                    cv2.ROTATE_90_COUNTERCLOCKWISE
+                )
                 self.holoImgReady.emit(self.holoImgRotated)
 
                 self._isBinarized = False
-                # self.binarizeImgBtn.setText("二值化原图")
 
                 self.calcHoloBtn.setEnabled(False)
-                # self.binarizeImgBtn.setEnabled(False)
                 self.maxIterNumInput.setEnabled(False)
                 self.uniThresNumInput.setEnabled(False)
-            else:
-                self.calcHoloBtn.setEnabled(False)
-                # self.binarizeImgBtn.setEnabled(False)
-                self.maxIterNumInput.setEnabled(False)
-                self.uniThresNumInput.setEnabled(False)
+                self.reconstructViewTabWidget.setCurrentIndex(0)
+                self.reconstructViewTabWidget.setTabEnabled(1, True)
+                self.reconstructViewTabWidget.setTabEnabled(2, False)
         else:
             logHandler.warning(f"No image loaded. ")
+
+    def reconstructResult(self, holoU, d, wavelength):
+        # 重建光场
+        result = libGS.reconstruct(holoU, d, wavelength)
+        Utils().cvImg2QPixmap(self.reconstructImgPreview, result.astype("uint8"))
+
+        self.reconstructViewTabWidget.setTabEnabled(1, True)
+
+        # 重建相位
+        phasePlot = self.reconstructPhase.add_subplot(111)
+        p = phasePlot.imshow(np.angle(holoU), cmap='RdYlGn')
+        phasePlot.set_xticks([])
+        phasePlot.set_yticks([])
+        cb = self.reconstructPhase.colorbar(
+            p, ax=phasePlot, orientation='horizontal', fraction=0.1, pad=0.03)
+        cb.set_ticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
+        phasePlot.spines['right'].set_visible(False)
+        phasePlot.spines['top'].set_visible(False)
+        phasePlot.spines['left'].set_visible(False)
+        phasePlot.spines['bottom'].set_visible(False)
+        self.reconstructPhase.tight_layout()
+
+    def iterationDraw(self):
+        iterationPlot = self.iterationHistory.add_subplot(111)
+        self.iterationHistory.tight_layout()
 
     def expTimeUpdatedEvent(self):
         """
