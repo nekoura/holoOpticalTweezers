@@ -75,8 +75,8 @@ def GSiteration(maxIterNum: int, uniThres: float, targetImg, uniList: list, effi
 
         phase = cp.angle(u)
 
-        # if uniformity >= uniThres:
-        #     break
+        if uniformity >= uniThres:
+            break
 
     # 显存GC
     cp._default_memory_pool.free_all_blocks()
@@ -94,7 +94,7 @@ def addWeight(uWeighted, target, uTarget, normIntensity):
     :param normIntensity: 归一化光强
     :return: 迭代后(step k)加权光场强度
     """
-    uWeighted[target == 1] = ((target[target == 1] / normIntensity[target == 1]) ** 0.5) * uTarget[target == 1]
+    uWeighted[target > 0] = ((target[target > 0] / normIntensity[target > 0]) ** 0.5) * uTarget[target > 0]
     return uWeighted
 
 
@@ -128,7 +128,7 @@ def efficiencyCalc(normIntensity, target) -> float:
     """
     efficiency = cp.sum(normIntensity[target == 1]) / cp.sum(target[target == 1])
 
-    return efficiency
+    return float(efficiency)
 
 
 def normalize(img):

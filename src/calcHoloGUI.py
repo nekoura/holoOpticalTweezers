@@ -12,13 +12,16 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
     QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
     QDialog, QFileDialog, QMessageBox, \
     QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
+from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from scipy.interpolate import interp1d
 from lib.utils.utils import Utils
 from lib.holo import libGS_GPU as libGS
 from lib.cam.camAPI import CameraMiddleware
 from lib.laser.laserAPI import LaserMiddleWare
 
+pyplot.ion()
 
 def exception_handler(errtype, value, traceback):
     # 捕获异步异常并显示错误消息
@@ -74,19 +77,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SLM Holograph Generator")
         self.resize(1200, 600)
 
-        mainWindowStyleSheet = '''
-            QWidget#ctrlArea {
-                max-width: 240px;
-                margin: 0;
-            }
-            QWidget#ctrlArea QPushButton {
-                height: 18px; 
-            }
-            QWidget#ctrlArea QSpinBox, QWidget#ctrlArea QDoubleSpinBox {
-                height: 22px; 
-            }
-        '''
-
         # ==== 控制区域 ====
         # self.binarizeImgBtn = QPushButton('二值化原图', self)
         # self.binarizeImgBtn.clicked.connect(self.onBinarizeImgBtnClicked)
@@ -123,7 +113,7 @@ class MainWindow(QMainWindow):
 
         self.maxIterNumInput = QSpinBox()
         self.maxIterNumInput.setRange(0, 10000)
-        self.maxIterNumInput.setValue(100)
+        self.maxIterNumInput.setValue(40)
         self.maxIterNumInput.setEnabled(False)
 
         uniThresNumText = QLabel("均匀度阈值")
@@ -235,6 +225,7 @@ class MainWindow(QMainWindow):
         ctrlArea = QWidget()
         ctrlArea.setObjectName("ctrlArea")
         ctrlArea.setLayout(ctrlAreaLayout)
+        ctrlArea.setFixedWidth(240)
 
         # ==== 显示区域 ====
         # 相机预览区域
@@ -294,16 +285,16 @@ class MainWindow(QMainWindow):
 
         # 重建光场相位分布显示区域
         self.reconstructPhase = Figure()
-        reconstructPhaseView = FigureCanvas(self.reconstructPhase)
+        self.reconstructPhaseView = FigureCanvas(self.reconstructPhase)
 
         # GS迭代历史显示区域
         self.iterationHistory = Figure()
-        iterationHistoryView = FigureCanvas(self.iterationHistory)
+        self.iterationHistoryView = FigureCanvas(self.iterationHistory)
 
         self.reconstructViewTabWidget = QTabWidget()
         self.reconstructViewTabWidget.addTab(reconstructImgWidget, "重建光场仿真")
-        self.reconstructViewTabWidget.addTab(reconstructPhaseView, "重建相位分布")
-        self.reconstructViewTabWidget.addTab(iterationHistoryView, "GS迭代历史")
+        self.reconstructViewTabWidget.addTab(self.reconstructPhaseView, "重建相位分布")
+        self.reconstructViewTabWidget.addTab(self.iterationHistoryView, "GS迭代历史")
         self.reconstructViewTabWidget.setTabEnabled(1, False)
         self.reconstructViewTabWidget.setTabEnabled(2, False)
 
@@ -327,7 +318,6 @@ class MainWindow(QMainWindow):
 
         widget = QWidget()
         widget.setLayout(layout)
-        widget.setStyleSheet(mainWindowStyleSheet)
         self.setCentralWidget(widget)
 
         self.statusBar = QStatusBar()
@@ -610,6 +600,9 @@ class MainWindow(QMainWindow):
             logHandler.info(f"Start Calculation.")
             self.statusBar.showMessage(f"开始计算...")
 
+            self._uniList.clear()
+            self._effiList.clear()
+
             maxIterNum = self.maxIterNumInput.value()
             uniThres = self.uniThresNumInput.value()
 
@@ -656,6 +649,8 @@ class MainWindow(QMainWindow):
                 uniformity = self._uniList[-1]
                 efficiency = self._effiList[-1]
 
+                self.iterationDraw()
+
                 logHandler.info(f"Finish Calculation.")
                 logHandler.info(
                     f"Iteration={iteration}, Duration={duration}s, "
@@ -663,7 +658,7 @@ class MainWindow(QMainWindow):
                 )
                 self.statusBar.showMessage(
                     f"计算完成。迭代{iteration}次，时长 {duration}s，"
-                    f"均匀度{round(uniformity, 4)}，光场利用效率{cp.around(efficiency, 4)}"
+                    f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}"
                 )
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(1)
@@ -785,22 +780,126 @@ class MainWindow(QMainWindow):
         self.reconstructViewTabWidget.setTabEnabled(1, True)
 
         # 重建相位
+        self.reconstructPhase.clf()
         phasePlot = self.reconstructPhase.add_subplot(111)
+
         p = phasePlot.imshow(np.angle(holoU), cmap='RdYlGn')
+
         phasePlot.set_xticks([])
         phasePlot.set_yticks([])
+
         cb = self.reconstructPhase.colorbar(
             p, ax=phasePlot, orientation='horizontal', fraction=0.1, pad=0.03)
-        cb.set_ticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
+        cb.set_ticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+        cb.formatter = ticker.FixedFormatter(['-π', '-π/2', '0', 'π/2', 'π'])
+        cb.ax.tick_params(labelsize=8)
+
         phasePlot.spines['right'].set_visible(False)
         phasePlot.spines['top'].set_visible(False)
         phasePlot.spines['left'].set_visible(False)
         phasePlot.spines['bottom'].set_visible(False)
+
         self.reconstructPhase.tight_layout()
+        self.reconstructPhase.canvas.draw()
 
     def iterationDraw(self):
+        def figureHoverEventIter(event):
+            # 当鼠标在图表上移动时，获取当前位置的x坐标值
+            x = event.xdata
+            mouseX, mouseY = iterationPlot.transData.inverted().transform((event.x, event.y))
+
+            # 如果x在数据范围内，则找到对应的y坐标值
+            if x is not None and 0 <= x <= iterationPlot.get_xlim()[1]:
+                # 获取最接近的x坐标的数据点插值结果
+                yUni = interpolated_uniList(x)
+                yEffi = interpolated_effiList(x)
+
+                # 格式化坐标数据
+                xyText = f"X={x:.2f}\nUni={yUni:.2f}\nEffi={yEffi:.2f}"
+
+                # 更新文本对象的内容
+                iterText.set_text(xyText)
+                iterText.set_position((mouseX + 2, mouseY))
+                iterText.set_visible(True)  # 显示文本
+
+                # 显示垂线
+                vline.set_data([x], [iterationPlot.get_ylim()[0], iterationPlot.get_ylim()[1]])
+                vline.set_visible(True)
+
+                # 计算并显示交点
+                crossPtU.set_data([x, x], [yUni, yUni])
+                crossPtU.set_visible(True)
+
+                crossPtE.set_data([x, x], [yEffi, yEffi])
+                crossPtE.set_visible(True)
+
+                self.iterationHistory.canvas.draw()  # 重绘画布
+
+                # 更新状态栏的显示
+                self.statusBar.showMessage(xyText)
+            else:
+                # 如果x不在数据范围内，则隐藏文本对象
+                iterText.set_visible(False)
+                vline.set_visible(False)
+                crossPtU.set_visible(False)
+                crossPtE.set_visible(False)
+                self.iterationHistory.canvas.draw()
+
+        self.reconstructViewTabWidget.setTabEnabled(2, True)
+
+        self.iterationHistory.clf()
+        self.iterationHistoryView.mpl_connect('motion_notify_event', figureHoverEventIter)
+
+        interpolated_uniList = interp1d(
+            np.arange(1, len(self._uniList) + 1),
+            self._uniList,
+            kind='linear',
+            fill_value="extrapolate"
+        )
+
+        interpolated_effiList = interp1d(
+            np.arange(1, len(self._uniList) + 1),
+            self._effiList,
+            kind='linear',
+            fill_value="extrapolate"
+        )
+
         iterationPlot = self.iterationHistory.add_subplot(111)
-        self.iterationHistory.tight_layout()
+
+        iterationPlot.plot(
+            np.arange(1, len(self._uniList) + 1), self._uniList, label='Uniformity'
+        )
+        iterationPlot.plot(
+            np.arange(1, len(self._uniList) + 1), self._effiList, label='efficiency'
+        )
+
+        iterationPlot.legend(loc='best', fontsize=8)
+
+        iterationPlot.set_xlabel("Iteration", fontsize=8)
+        iterationPlot.tick_params(axis='x', labelsize=8)
+        iterationPlot.tick_params(axis='y', labelsize=8)
+
+        # 创建一个用于显示坐标的文本对象，初始时不显示
+        iterText = iterationPlot.text(
+            0, 0, '', transform=iterationPlot.transData,
+            ha='left', va='top', fontsize=8,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.5)
+        )
+        iterText.set_visible(False)  # 初始时不显示文本
+
+        # 创建一个垂线对象
+        vline, = iterationPlot.plot([], [], '-', color='grey', lw=0.5)
+        vline.set_visible(False)  # 初始时不显示垂线
+
+        # 创建一个用于显示交点的小圆点对象
+        crossPtU = iterationPlot.plot([], [], 'o', color='C0', markersize=5)[0]
+        crossPtU.set_visible(False)
+
+        crossPtE = iterationPlot.plot([], [], 'o', color='C1', markersize=5)[0]
+        crossPtE.set_visible(False)
+
+        # self.iterationHistory.tight_layout()
+        self.iterationHistory.canvas.draw()
 
     def expTimeUpdatedEvent(self):
         """
@@ -828,6 +927,8 @@ class MainWindow(QMainWindow):
             for i in range(len(self.laser.portList)):
                 logHandler.info(f"{self.laser.portList[i]}")
                 self.laserPortSel.addItem(f"{self.laser.portList[i]}")
+
+
 
 
 class SecondMonitorWindow(QMainWindow):
