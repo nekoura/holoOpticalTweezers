@@ -4,12 +4,12 @@
 import cupy as cp
 
 
-def GSiteration(maxIterNum: int, uniThres: float, targetImg, uniList: list, effiList: list) -> tuple:
+def GSiteration(maxIterNum: int, effThres: float, targetImg, uniList: list, effiList: list) -> tuple:
     """
     GS迭代算法
 
     :param maxIterNum: 最大迭代次数
-    :param uniThres: 迭代目标（均匀性）
+    :param effThres: 迭代目标（均匀性）
     :param targetImg: 目标图像
     :param uniList: 均匀性记录
     :return: 相位, 归一化光强
@@ -75,7 +75,7 @@ def GSiteration(maxIterNum: int, uniThres: float, targetImg, uniList: list, effi
 
         phase = cp.angle(u)
 
-        if uniformity >= uniThres:
+        if efficiency >= effThres:
             break
 
     # 显存GC

@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
 from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from scipy.interpolate import interp1d
 from lib.utils.utils import Utils
 from lib.holo import libGS_GPU as libGS
 from lib.cam.camAPI import CameraMiddleware
@@ -53,6 +52,10 @@ class MainWindow(QMainWindow):
         self.binarizedImg = None
         self._uniList = []
         self._effiList = []
+
+        self._pressed = False
+        self._lastX = 0
+        self._lastY = 0
 
         # 相机实例通信
         self.cam = CameraMiddleware()
@@ -116,12 +119,12 @@ class MainWindow(QMainWindow):
         self.maxIterNumInput.setValue(40)
         self.maxIterNumInput.setEnabled(False)
 
-        uniThresNumText = QLabel("均匀度阈值")
+        effThresNumText = QLabel("光能利用率阈值")
 
-        self.uniThresNumInput = QDoubleSpinBox()
-        self.uniThresNumInput.setRange(0, 1)
-        self.uniThresNumInput.setValue(0.95)
-        self.uniThresNumInput.setEnabled(False)
+        self.effThresNumInput = QDoubleSpinBox()
+        self.effThresNumInput.setRange(0, 1)
+        self.effThresNumInput.setValue(0.95)
+        self.effThresNumInput.setEnabled(False)
 
         self.calcHoloBtn = QPushButton('计算全息图')
         self.calcHoloBtn.clicked.connect(self.calcHoloImg)
@@ -133,9 +136,9 @@ class MainWindow(QMainWindow):
 
         calHoloLayout = QGridLayout()
         calHoloLayout.addWidget(maxIterNumText, 0, 0, 1, 1)
-        calHoloLayout.addWidget(uniThresNumText, 0, 1, 1, 1)
+        calHoloLayout.addWidget(effThresNumText, 0, 1, 1, 1)
         calHoloLayout.addWidget(self.maxIterNumInput, 1, 0, 1, 1)
-        calHoloLayout.addWidget(self.uniThresNumInput, 1, 1, 1, 1)
+        calHoloLayout.addWidget(self.effThresNumInput, 1, 1, 1, 1)
         calHoloLayout.addWidget(self.calcHoloBtn, 2, 0, 1, 1)
         calHoloLayout.addWidget(self.saveHoloBtn, 2, 1, 1, 1)
         calHoloLayout.setColumnStretch(0, 1)
@@ -284,19 +287,24 @@ class MainWindow(QMainWindow):
         reconstructImgWidget.setLayout(reconstructImgVLayout)
 
         # 重建光场相位分布显示区域
-        self.reconstructPhase = Figure()
-        self.reconstructPhaseView = FigureCanvas(self.reconstructPhase)
+        self.reconstructPhase2D = Figure()
+        reconstructPhase2DCanvas = FigureCanvas(self.reconstructPhase2D)
+
+        self.reconstructPhase3D = Figure()
+        reconstructPhase3DCanvas = FigureCanvas(self.reconstructPhase3D)
 
         # GS迭代历史显示区域
         self.iterationHistory = Figure()
-        self.iterationHistoryView = FigureCanvas(self.iterationHistory)
+        iterationHistoryCanvas = FigureCanvas(self.iterationHistory)
 
         self.reconstructViewTabWidget = QTabWidget()
-        self.reconstructViewTabWidget.addTab(reconstructImgWidget, "重建光场仿真")
-        self.reconstructViewTabWidget.addTab(self.reconstructPhaseView, "重建相位分布")
-        self.reconstructViewTabWidget.addTab(self.iterationHistoryView, "GS迭代历史")
+        self.reconstructViewTabWidget.addTab(reconstructImgWidget, "重建仿真")
+        self.reconstructViewTabWidget.addTab(reconstructPhase2DCanvas, "重建相位2D")
+        self.reconstructViewTabWidget.addTab(reconstructPhase3DCanvas, "重建相位3D")
+        self.reconstructViewTabWidget.addTab(iterationHistoryCanvas, "迭代历史")
         self.reconstructViewTabWidget.setTabEnabled(1, False)
         self.reconstructViewTabWidget.setTabEnabled(2, False)
+        self.reconstructViewTabWidget.setTabEnabled(3, False)
 
         imgViewAreaLayout = QGridLayout()
         imgViewAreaLayout.addWidget(camPreviewGroupBox, 0, 1, 2, 1)
@@ -604,7 +612,7 @@ class MainWindow(QMainWindow):
             self._effiList.clear()
 
             maxIterNum = self.maxIterNumInput.value()
-            uniThres = self.uniThresNumInput.value()
+            uniThres = self.effThresNumInput.value()
 
             targetNormalized = self.targetImg / 255
 
@@ -732,10 +740,11 @@ class MainWindow(QMainWindow):
 
                 self.calcHoloBtn.setEnabled(True)
                 self.maxIterNumInput.setEnabled(True)
-                self.uniThresNumInput.setEnabled(True)
+                self.effThresNumInput.setEnabled(True)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, False)
                 self.reconstructViewTabWidget.setTabEnabled(2, False)
+                self.reconstructViewTabWidget.setTabEnabled(3, False)
 
             self.saveHoloBtn.setEnabled(False)
             logHandler.debug(f"UI thread updated. Initiator=User  Mode=refresh")
@@ -765,30 +774,104 @@ class MainWindow(QMainWindow):
 
                 self.calcHoloBtn.setEnabled(False)
                 self.maxIterNumInput.setEnabled(False)
-                self.uniThresNumInput.setEnabled(False)
+                self.effThresNumInput.setEnabled(False)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, True)
-                self.reconstructViewTabWidget.setTabEnabled(2, False)
+                self.reconstructViewTabWidget.setTabEnabled(2, True)
+                self.reconstructViewTabWidget.setTabEnabled(3, False)
         else:
             logHandler.warning(f"No image loaded. ")
 
     def reconstructResult(self, holoU, d, wavelength):
+
+        def onMousePress2D(event):
+            if event.inaxes:  # 判断鼠标是否在axes内
+                if event.button == 1:  # 判断按下的是否为鼠标左键1（右键是3）
+                    self._pressed = True
+                    self._lastX = event.xdata  # 获取鼠标按下时的坐标X
+                    self._lastY = event.ydata  # 获取鼠标按下时的坐标Y
+
+        def onMouseMove2D(event):
+            axtemp = event.inaxes
+            if axtemp:
+                if self._pressed:  # 按下状态
+                    # 计算新的坐标原点并移动
+                    # 获取当前最新鼠标坐标与按下时坐标的差值
+                    x = event.xdata - self._lastX
+                    y = event.ydata - self._lastY
+                    # 获取当前原点和最大点的4个位置
+                    xMin, xMax = axtemp.get_xlim()
+                    yMin, yMax = axtemp.get_ylim()
+
+                    xMin = xMin - x
+                    xMax = xMax - x
+                    yMin = yMin - y
+                    yMax = yMax - y
+
+                    axtemp.set_xlim(xMin, xMax)
+                    axtemp.set_ylim(yMin, yMax)
+                    self.reconstructPhase.canvas.draw()
+
+        def onMouseRelease2D(event):
+            if self._pressed:
+                self._pressed = False  # 鼠标松开，结束移动
+
+        def onScroll2D(event):
+            axtemp = event.inaxes
+            xMin, xMax = axtemp.get_xlim()
+            yMin, yMax = axtemp.get_ylim()
+            xRange = (xMax - xMin) / 10
+            yRange = (yMax - yMin) / 10
+            if event.button == 'up':
+                axtemp.set(xlim=(xMin + xRange, xMax - xRange))
+                axtemp.set(ylim=(yMin + yRange, yMax - yRange))
+            elif event.button == 'down':
+                axtemp.set(xlim=(xMin - xRange, xMax + xRange))
+                axtemp.set(ylim=(yMin - yRange, yMax + yRange))
+
+            self.reconstructPhase.canvas.draw()
+
+        def onScroll3D(event):
+            axtemp = event.inaxes
+            xMin, xMax = axtemp.get_xlim()
+            yMin, yMax = axtemp.get_ylim()
+            zMin, zMax = axtemp.get_zlim()
+            xRange = (xMax - xMin) / 10
+            yRange = (yMax - yMin) / 10
+            zRange = (zMax - zMin) / 10
+            if event.button == 'up':
+                axtemp.set(xlim=(xMin + xRange, xMax - xRange))
+                axtemp.set(ylim=(yMin + yRange, yMax - yRange))
+                axtemp.set(zlim=(zMin + zRange, zMax - zRange))
+            elif event.button == 'down':
+                axtemp.set(xlim=(xMin - xRange, xMax + xRange))
+                axtemp.set(ylim=(yMin - yRange, yMax + yRange))
+                axtemp.set(zlim=(zMin - zRange, zMax + zRange))
+
+            self.reconstructPhase3D.canvas.draw()
+
         # 重建光场
         result = libGS.reconstruct(holoU, d, wavelength)
         Utils().cvImg2QPixmap(self.reconstructImgPreview, result.astype("uint8"))
 
         self.reconstructViewTabWidget.setTabEnabled(1, True)
+        self.reconstructViewTabWidget.setTabEnabled(2, True)
 
         # 重建相位
-        self.reconstructPhase.clf()
-        phasePlot = self.reconstructPhase.add_subplot(111)
+        self.reconstructPhase2D.clf()
+        self.reconstructPhase2D.canvas.mpl_connect('scroll_event', onScroll2D)
+        self.reconstructPhase2D.canvas.mpl_connect("button_press_event", onMousePress2D)
+        self.reconstructPhase2D.canvas.mpl_connect("button_release_event", onMouseRelease2D)
+        self.reconstructPhase2D.canvas.mpl_connect("motion_notify_event", onMouseMove2D)
+
+        phasePlot = self.reconstructPhase2D.add_subplot(111)
 
         p = phasePlot.imshow(np.angle(holoU), cmap='RdYlGn')
 
         phasePlot.set_xticks([])
         phasePlot.set_yticks([])
 
-        cb = self.reconstructPhase.colorbar(
+        cb = self.reconstructPhase2D.colorbar(
             p, ax=phasePlot, orientation='horizontal', fraction=0.1, pad=0.03)
         cb.set_ticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
         cb.formatter = ticker.FixedFormatter(['-π', '-π/2', '0', 'π/2', 'π'])
@@ -799,8 +882,27 @@ class MainWindow(QMainWindow):
         phasePlot.spines['left'].set_visible(False)
         phasePlot.spines['bottom'].set_visible(False)
 
-        self.reconstructPhase.tight_layout()
-        self.reconstructPhase.canvas.draw()
+        self.reconstructPhase2D.tight_layout()
+        self.reconstructPhase2D.canvas.draw()
+
+        # 重建相位3D
+        self.reconstructPhase3D.clf()
+        self.reconstructPhase3D.canvas.mpl_connect('scroll_event', onScroll3D)
+
+        phasePlot3D = self.reconstructPhase3D.add_subplot(111, projection='3d')
+
+        x, y = np.meshgrid(range(np.angle(holoU).shape[1]), range(np.angle(holoU).shape[0]))
+
+        phasePlot3D.plot_surface(x, y, np.angle(holoU), cmap='viridis')
+
+        phasePlot3D.set_xticks([])
+        phasePlot3D.set_yticks([])
+        phasePlot3D.set_zticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
+        phasePlot3D.zaxis.set_major_formatter(ticker.FixedFormatter(['-π', '-π/2', '0', 'π/2', 'π']))
+
+        self.reconstructPhase3D.tight_layout()
+        self.reconstructPhase3D.subplots_adjust(left=-0.05)
+        self.reconstructPhase3D.canvas.draw()
 
     def iterationDraw(self):
         def figureHoverEventIter(event):
@@ -810,33 +912,45 @@ class MainWindow(QMainWindow):
 
             # 如果x在数据范围内，则找到对应的y坐标值
             if x is not None and 0 <= x <= iterationPlot.get_xlim()[1]:
-                # 获取最接近的x坐标的数据点插值结果
-                yUni = interpolated_uniList(x)
-                yEffi = interpolated_effiList(x)
+                x_index = np.searchsorted(xData, x, side='left')
+                if 0 < x_index <= len(xData):
+                    # 获取最接近的x坐标的数据点插值结果
+                    xVal = xData[x_index - 1]
+                    yUni = self._uniList[x_index - 1]
+                    yEffi = self._effiList[x_index - 1]
 
-                # 格式化坐标数据
-                xyText = f"X={x:.2f}\nUni={yUni:.2f}\nEffi={yEffi:.2f}"
+                    # 格式化坐标数据
+                    xyText = f"X={xVal:.2f}\nUni={yUni:.2f}\nEffi={yEffi:.2f}"
 
-                # 更新文本对象的内容
-                iterText.set_text(xyText)
-                iterText.set_position((mouseX + 2, mouseY))
-                iterText.set_visible(True)  # 显示文本
+                    # 更新文本对象的内容
+                    iterText.set_text(xyText)
+                    iterText.set_position(
+                        (mouseX - 0.1 * iterationPlot.get_xlim()[1], mouseY + 0.2)
+                    )
+                    iterText.set_visible(True)  # 显示文本
 
-                # 显示垂线
-                vline.set_data([x], [iterationPlot.get_ylim()[0], iterationPlot.get_ylim()[1]])
-                vline.set_visible(True)
+                    # 显示垂线
+                    vline.set_data([xVal], [iterationPlot.get_ylim()[0], iterationPlot.get_ylim()[1]])
+                    vline.set_visible(True)
 
-                # 计算并显示交点
-                crossPtU.set_data([x, x], [yUni, yUni])
-                crossPtU.set_visible(True)
+                    # 计算并显示交点
+                    crossPtU.set_data([xVal, xVal], [yUni, yUni])
+                    crossPtU.set_visible(True)
 
-                crossPtE.set_data([x, x], [yEffi, yEffi])
-                crossPtE.set_visible(True)
+                    crossPtE.set_data([xVal, xVal], [yEffi, yEffi])
+                    crossPtE.set_visible(True)
 
-                self.iterationHistory.canvas.draw()  # 重绘画布
+                    self.iterationHistory.canvas.draw()  # 重绘画布
 
-                # 更新状态栏的显示
-                self.statusBar.showMessage(xyText)
+                    # 更新状态栏的显示
+                    self.statusBar.showMessage(xyText)
+                else:
+                    # 如果x不在数据范围内，则隐藏文本对象
+                    iterText.set_visible(False)
+                    vline.set_visible(False)
+                    crossPtU.set_visible(False)
+                    crossPtE.set_visible(False)
+                    self.iterationHistory.canvas.draw()
             else:
                 # 如果x不在数据范围内，则隐藏文本对象
                 iterText.set_visible(False)
@@ -845,33 +959,17 @@ class MainWindow(QMainWindow):
                 crossPtE.set_visible(False)
                 self.iterationHistory.canvas.draw()
 
-        self.reconstructViewTabWidget.setTabEnabled(2, True)
+        self.reconstructViewTabWidget.setTabEnabled(3, True)
 
         self.iterationHistory.clf()
-        self.iterationHistoryView.mpl_connect('motion_notify_event', figureHoverEventIter)
-
-        interpolated_uniList = interp1d(
-            np.arange(1, len(self._uniList) + 1),
-            self._uniList,
-            kind='linear',
-            fill_value="extrapolate"
-        )
-
-        interpolated_effiList = interp1d(
-            np.arange(1, len(self._uniList) + 1),
-            self._effiList,
-            kind='linear',
-            fill_value="extrapolate"
-        )
+        self.iterationHistory.canvas.mpl_connect('motion_notify_event', figureHoverEventIter)
 
         iterationPlot = self.iterationHistory.add_subplot(111)
 
-        iterationPlot.plot(
-            np.arange(1, len(self._uniList) + 1), self._uniList, label='Uniformity'
-        )
-        iterationPlot.plot(
-            np.arange(1, len(self._uniList) + 1), self._effiList, label='efficiency'
-        )
+        xData = np.arange(1, len(self._uniList) + 1)
+
+        iterationPlot.plot(xData, self._uniList, label='Uniformity')
+        iterationPlot.plot(xData, self._effiList, label='efficiency')
 
         iterationPlot.legend(loc='best', fontsize=8)
 
@@ -883,12 +981,12 @@ class MainWindow(QMainWindow):
         iterText = iterationPlot.text(
             0, 0, '', transform=iterationPlot.transData,
             ha='left', va='top', fontsize=8,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.5)
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
         )
         iterText.set_visible(False)  # 初始时不显示文本
 
         # 创建一个垂线对象
-        vline, = iterationPlot.plot([], [], '-', color='grey', lw=0.5)
+        vline, = iterationPlot.plot([], [], '-', color='silver', lw=0.5)
         vline.set_visible(False)  # 初始时不显示垂线
 
         # 创建一个用于显示交点的小圆点对象
@@ -898,7 +996,8 @@ class MainWindow(QMainWindow):
         crossPtE = iterationPlot.plot([], [], 'o', color='C1', markersize=5)[0]
         crossPtE.set_visible(False)
 
-        # self.iterationHistory.tight_layout()
+        self.iterationHistory.tight_layout()
+        self.iterationHistory.subplots_adjust(left=0.1, bottom=0.12)
         self.iterationHistory.canvas.draw()
 
     def expTimeUpdatedEvent(self):
