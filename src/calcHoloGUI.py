@@ -810,7 +810,7 @@ class MainWindow(QMainWindow):
 
                     axtemp.set_xlim(xMin, xMax)
                     axtemp.set_ylim(yMin, yMax)
-                    self.reconstructPhase.canvas.draw()
+                    self.reconstructPhase2D.canvas.draw()
 
         def onMouseRelease2D(event):
             if self._pressed:
@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
                 axtemp.set(xlim=(xMin - xRange, xMax + xRange))
                 axtemp.set(ylim=(yMin - yRange, yMax + yRange))
 
-            self.reconstructPhase.canvas.draw()
+            self.reconstructPhase2D.canvas.draw()
 
         def onScroll3D(event):
             axtemp = event.inaxes
