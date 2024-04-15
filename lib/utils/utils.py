@@ -49,8 +49,13 @@ class Utils:
             required=False, help='Set logfile log level and enable logfile'
         )
         parser.add_argument(
-            '-d', '--autodetect', default=False, action='store_true',
-            required=False, help='Auto detect LCOS monitor'
+            '-d', '--auto-detect', default=False, action='store_true',
+            required=False, help='Auto detect LCOS devices'
+        )
+
+        parser.add_argument(
+            '-b', '--bypass-LCOS-detection', default=False, action='store_true',
+            required=False, help='Bypass LCOS detection (set current monitor as LCOS, for development only)'
         )
 
         args = parser.parse_args()

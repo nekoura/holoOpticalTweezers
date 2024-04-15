@@ -182,9 +182,11 @@ class MainWindow(QMainWindow):
 
         # 激光器功能区
         self.laserPortSel = QComboBox()
+        self.laserPortSel.setEnabled(False)
 
         self.connectLaserBtn = QPushButton('连接控制盒')
         self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
+        self.connectLaserBtn.setEnabled(False)
 
         self.toggleLaserBtn = QPushButton('启动激光')
         self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
@@ -1039,18 +1041,23 @@ class MainWindow(QMainWindow):
         try:
             self.laser.listComPorts()
         except IndexError:
-            logHandler.error(f"No available ports found.")
-            QMessageBox.critical(
+            logHandler.warning(f"No available COM ports found.")
+            QMessageBox.warning(
                 self,
-                '错误',
-                f'未发现可用端口\n'
-                f'请尝试重新连接USB线，并确认端口选择正确、驱动安装正确或未被其他程序占用。'
+                '警告',
+                f'未发现可用端口，无法连接至激光器控制盒。\n'
+                f'请尝试重新连接USB线，并确认端口选择正确、驱动安装正确或未被其他程序占用。\n'
+                f'若实验设备无需使用带通信功能的激光器控制盒，请忽略本消息。'
             )
+            self.laserPortSel.addItem(f"未发现可用端口")
         else:
             logHandler.info(f"Detected COM port(s):")
             for i in range(len(self.laser.portList)):
                 logHandler.info(f"{self.laser.portList[i]}")
                 self.laserPortSel.addItem(f"{self.laser.portList[i]}")
+
+            self.laserPortSel.setEnabled(True)
+            self.connectLaserBtn.setEnabled(True)
 
 
 class SecondMonitorWindow(QMainWindow):
@@ -1104,7 +1111,7 @@ class SecondMonitorWindow(QMainWindow):
         screens = QGuiApplication.screens()
 
         if len(screens) > 1:
-            autodetect = any(arg == '-d' or arg == '--autodetect' for arg in sys.argv[1:])
+            autodetect = any(arg == '-d' or arg == '--auto-detect' for arg in sys.argv[1:])
             if autodetect:
                 for index, screen in enumerate(screens):
                     if 'JDC EDK' in screen.name():
@@ -1122,11 +1129,11 @@ class SecondMonitorWindow(QMainWindow):
                     QMessageBox.critical(
                         self,
                         '错误',
-                        f'未检测到名为 "JDC EDK" 的LCOS硬件。\n'
+                        f'程序被配置为[自动检测LCOS设备]模式，但未检测到名为 "JDC EDK" 的LCOS硬件。\n'
                         f'请重新连接SLM，确认电源已打开，或在显示设置中确认配置正确。'
                     )
                     logHandler.error(
-                        f"No LCOS named 'JDC EDK' Detected. "
+                        f"Auto detect mode, No LCOS named 'JDC EDK' detected. "
                         f"Check your connection, power status or screen configuration."
                     )
                     sys.exit()
@@ -1139,17 +1146,30 @@ class SecondMonitorWindow(QMainWindow):
             logHandler.info(f"Monitor {self._selMonIndex} selected.")
 
         else:
-            QMessageBox.critical(
-                self,
-                '错误',
-                f'未检测到多显示器。\n'
-                f'请重新连接SLM，，确认电源已打开，或在显示设置中确认配置正确。'
-            )
-            logHandler.error(
-                f"No Multi-monitors Detected. "
-                f"Check your connection, power status or screen configuration."
-            )
-            sys.exit()
+            if any(arg == '-b' or arg == '--bypass-LCOS-detection' for arg in sys.argv[1:]):
+                self.setGeometry(screens[0].geometry().x(), screens[0].geometry().y(),
+                                 screens[0].size().width(), screens[0].size().height())
+                logHandler.warning(f"Bypass LCOS detection mode, current monitor selected.")
+
+                QMessageBox.warning(
+                    self,
+                    '警告',
+                    f'程序被配置为[绕过LCOS设备检测]模式。\n'
+                    f'当前监视器被设置为LCOS监视器，屏幕可能闪烁。该功能仅供开发时使用。'
+                )
+
+            else:
+                QMessageBox.critical(
+                    self,
+                    '错误',
+                    f'未检测到多显示器。\n'
+                    f'请重新连接SLM，确认电源已打开，或在显示设置中确认配置正确。'
+                )
+                logHandler.error(
+                    f"No Multi-monitors Detected. "
+                    f"Check your connection, power status or screen configuration."
+                )
+                sys.exit()
 
     def monitorDetectionUI(self, screens):
         """
