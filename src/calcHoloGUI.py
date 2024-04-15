@@ -15,16 +15,12 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
 from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from lib.utils.utils import Utils
+from lib.utils.utils import Utils, ImgProcess
 from lib.holo import libGS_GPU as libGS
 from lib.cam.camAPI import CameraMiddleware
 from lib.laser.laserAPI import LaserMiddleWare
 
 pyplot.ion()
-
-def exception_handler(errtype, value, traceback):
-    # 捕获异步异常并显示错误消息
-    QMessageBox.critical(None, 'Error', f"{errtype}\n{value}\n{traceback}")
 
 
 class MainWindow(QMainWindow):
@@ -489,7 +485,7 @@ class MainWindow(QMainWindow):
         else:
             if imgDir is not None and imgDir != '':
                 try:
-                    self.pendingImg = Utils().loadImg(imgDir)
+                    self.pendingImg = ImgProcess.loadImg(imgDir)
                 except IOError:
                     QMessageBox.critical(self, '错误', '文件打开失败')
                     logHandler.error(f"Fail to load image: I/O Error")
@@ -510,7 +506,7 @@ class MainWindow(QMainWindow):
         else:
             if imgDir is not None and imgDir != '':
                 try:
-                    self.holoImg = Utils().loadImg(imgDir)
+                    self.holoImg = ImgProcess.loadImg(imgDir)
                     self.holoU = np.load(f"{Path(imgDir).parent / Path(imgDir).stem}.npy")
                 except IOError:
                     QMessageBox.critical(
@@ -562,37 +558,37 @@ class MainWindow(QMainWindow):
                 self.cam.device.put_ExpoTime(int(value) * 1000)
                 logHandler.debug(f"Exp config send. Initiator=User")
 
-    def onBinarizeImgBtnClicked(self):
-        """
-        (WIP)[UI操作] 对待处理图像二值化
-
-        todo: 解决二值化效果不佳
-        """
-        if self.pendingImg is not None:
-            # 还原原图
-            if self._isBinarized:
-                Utils().cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
-                self.binarizeImgBtn.setText("二值化原图")
-                self.statusBar.showMessage(f"已还原原图")
-                self._isBinarized = False
-                logHandler.info(f"Image has been restored.")
-            # 二值化原图
-            else:
-                try:
-                    self.binarizedImg = cv2.threshold(
-                        self.pendingImg, 127, 255, cv2.THRESH_BINARY
-                    )
-                    # self.binarizedImg = cv2.adaptiveThreshold(
-                    #     self.pendingImg, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-                    # )
-                except Exception as err:
-                    logHandler.error(f"Fail to binarize image: {err}")
-                else:
-                    Utils().cvImg2QPixmap(self.targetImgPreview, self.binarizedImg)
-                    self.binarizeImgBtn.setText("还原原图")
-                    self.statusBar.showMessage(f"已二值化图像")
-                    self._isBinarized = True
-                    logHandler.info(f"Image has been binarized.")
+    # def onBinarizeImgBtnClicked(self):
+    #     """
+    #     (WIP)[UI操作] 对待处理图像二值化
+    #
+    #     todo: 解决二值化效果不佳
+    #     """
+    #     if self.pendingImg is not None:
+    #         # 还原原图
+    #         if self._isBinarized:
+    #             ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
+    #             self.binarizeImgBtn.setText("二值化原图")
+    #             self.statusBar.showMessage(f"已还原原图")
+    #             self._isBinarized = False
+    #             logHandler.info(f"Image has been restored.")
+    #         # 二值化原图
+    #         else:
+    #             try:
+    #                 self.binarizedImg = cv2.threshold(
+    #                     self.pendingImg, 127, 255, cv2.THRESH_BINARY
+    #                 )
+    #                 # self.binarizedImg = cv2.adaptiveThreshold(
+    #                 #     self.pendingImg, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    #                 # )
+    #             except Exception as err:
+    #                 logHandler.error(f"Fail to binarize image: {err}")
+    #             else:
+    #                 ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.binarizedImg)
+    #                 self.binarizeImgBtn.setText("还原原图")
+    #                 self.statusBar.showMessage(f"已二值化图像")
+    #                 self._isBinarized = True
+    #                 logHandler.info(f"Image has been binarized.")
 
     def calcHoloImg(self):
         """
@@ -644,7 +640,7 @@ class MainWindow(QMainWindow):
                 tEnd = time.time()
 
                 # 在预览窗口显示计算好的全息图
-                Utils().cvImg2QPixmap(self.holoImgPreview, self.holoImg)
+                ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
                 # 向副屏发送计算好的全息图
                 self.holoImgReady.emit(self.holoImgRotated)
                 logHandler.info(f"Image has been transferred to the second monitor.")
@@ -703,8 +699,11 @@ class MainWindow(QMainWindow):
             image_array = np.frombuffer(ptr, dtype=np.uint8).reshape((height, width, 3))
 
             self.pendingImg = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-            cv2.imwrite('./snap.jpg', self.pendingImg)
+
+            self.pendingImg = ImgProcess().createGaussianBeamMask(self.pendingImg, 6)
+
             self.imgLoadedEvent(f"Snap", None)
+
             self._snapAsTarget = False
 
             filename = f"{time.strftime('%Y%m%d%H%M%S')}-asTarget"
@@ -728,9 +727,9 @@ class MainWindow(QMainWindow):
 
                 self.statusBar.showMessage(f"已加载图像{targetDir}，分辨率{imgRes}")
                 self.holoImg = None
-                Utils().cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
-                Utils().cvImg2QPixmap(self.holoImgPreview, None)
-                Utils().cvImg2QPixmap(self.reconstructImgPreview, None)
+                ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
+                ImgProcess.cvImg2QPixmap(self.holoImgPreview, None)
+                ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, None)
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(0)
                 self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
@@ -757,8 +756,8 @@ class MainWindow(QMainWindow):
 
                 self.statusBar.showMessage(f"已加载图像{holoDir}，分辨率{imgRes}")
                 self.pendingImg = None
-                Utils().cvImg2QPixmap(self.targetImgPreview, None)
-                Utils().cvImg2QPixmap(self.holoImgPreview, self.holoImg)
+                ImgProcess.cvImg2QPixmap(self.targetImgPreview, None)
+                ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
                 self.reconstructResult(self.holoU, 50, 532e-6)
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(1)
@@ -782,9 +781,18 @@ class MainWindow(QMainWindow):
         else:
             logHandler.warning(f"No image loaded. ")
 
-    def reconstructResult(self, holoU, d, wavelength):
+    def reconstructResult(self, holoU, d: int, wavelength: float):
+        """
+        [UI事件] 重建光场和相位
+        :param holoU: 全息光场
+        :param d: 像面距离
+        :param wavelength: 激光波长
+        """
 
         def onMousePress2D(event):
+            """
+            2D相位重建 鼠标按下事件
+            """
             if event.inaxes:  # 判断鼠标是否在axes内
                 if event.button == 1:  # 判断按下的是否为鼠标左键1（右键是3）
                     self._pressed = True
@@ -792,46 +800,57 @@ class MainWindow(QMainWindow):
                     self._lastY = event.ydata  # 获取鼠标按下时的坐标Y
 
         def onMouseMove2D(event):
-            axtemp = event.inaxes
-            if axtemp:
+            """
+            2D相位重建 鼠标移动事件
+            """
+            if event.inaxes:
                 if self._pressed:  # 按下状态
                     # 计算新的坐标原点并移动
                     # 获取当前最新鼠标坐标与按下时坐标的差值
-                    x = event.xdata - self._lastX
-                    y = event.ydata - self._lastY
+
+                    xDelta = event.xdata - self._lastX
+                    yDelta = event.ydata - self._lastY
                     # 获取当前原点和最大点的4个位置
-                    xMin, xMax = axtemp.get_xlim()
-                    yMin, yMax = axtemp.get_ylim()
+                    xMin, xMax = event.inaxes.get_xlim()
+                    yMin, yMax = event.inaxes.get_ylim()
 
-                    xMin = xMin - x
-                    xMax = xMax - x
-                    yMin = yMin - y
-                    yMax = yMax - y
+                    xMin = xMin - xDelta
+                    xMax = xMax - xDelta
+                    yMin = yMin - yDelta
+                    yMax = yMax - yDelta
 
-                    axtemp.set_xlim(xMin, xMax)
-                    axtemp.set_ylim(yMin, yMax)
+                    event.inaxes.set_xlim(xMin, xMax)
+                    event.inaxes.set_ylim(yMin, yMax)
                     self.reconstructPhase2D.canvas.draw()
 
         def onMouseRelease2D(event):
+            """
+            2D相位重建 鼠标离开事件
+            """
             if self._pressed:
                 self._pressed = False  # 鼠标松开，结束移动
 
         def onScroll2D(event):
-            axtemp = event.inaxes
-            xMin, xMax = axtemp.get_xlim()
-            yMin, yMax = axtemp.get_ylim()
+            """
+            2D相位重建 鼠标滚动事件
+            """
+            xMin, xMax = event.inaxes.get_xlim()
+            yMin, yMax = event.inaxes.get_ylim()
             xRange = (xMax - xMin) / 10
             yRange = (yMax - yMin) / 10
             if event.button == 'up':
-                axtemp.set(xlim=(xMin + xRange, xMax - xRange))
-                axtemp.set(ylim=(yMin + yRange, yMax - yRange))
+                event.inaxes.set(xlim=(xMin + xRange, xMax - xRange))
+                event.inaxes.set(ylim=(yMin + yRange, yMax - yRange))
             elif event.button == 'down':
-                axtemp.set(xlim=(xMin - xRange, xMax + xRange))
-                axtemp.set(ylim=(yMin - yRange, yMax + yRange))
+                event.inaxes.set(xlim=(xMin - xRange, xMax + xRange))
+                event.inaxes.set(ylim=(yMin - yRange, yMax + yRange))
 
             self.reconstructPhase2D.canvas.draw()
 
         def onScroll3D(event):
+            """
+            3D相位重建 鼠标滚动事件
+            """
             axtemp = event.inaxes
             xMin, xMax = axtemp.get_xlim()
             yMin, yMax = axtemp.get_ylim()
@@ -852,7 +871,7 @@ class MainWindow(QMainWindow):
 
         # 重建光场
         result = libGS.reconstruct(holoU, d, wavelength)
-        Utils().cvImg2QPixmap(self.reconstructImgPreview, result.astype("uint8"))
+        ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, result.astype("uint8"))
 
         self.reconstructViewTabWidget.setTabEnabled(1, True)
         self.reconstructViewTabWidget.setTabEnabled(2, True)
@@ -905,6 +924,9 @@ class MainWindow(QMainWindow):
         self.reconstructPhase3D.canvas.draw()
 
     def iterationDraw(self):
+        """
+        [UI事件] 迭代参数分析
+        """
         def figureHoverEventIter(event):
             # 当鼠标在图表上移动时，获取当前位置的x坐标值
             x = event.xdata
@@ -1011,6 +1033,9 @@ class MainWindow(QMainWindow):
             logHandler.debug(f"UI thread updated. Initiator=Camera  Mode=refresh")
 
     def deviceUpdatedEvent(self):
+        """
+        [UI事件] 串口设备侦测
+        """
         try:
             self.laser.listComPorts()
         except IndexError:
@@ -1026,8 +1051,6 @@ class MainWindow(QMainWindow):
             for i in range(len(self.laser.portList)):
                 logHandler.info(f"{self.laser.portList[i]}")
                 self.laserPortSel.addItem(f"{self.laser.portList[i]}")
-
-
 
 
 class SecondMonitorWindow(QMainWindow):
@@ -1072,7 +1095,7 @@ class SecondMonitorWindow(QMainWindow):
         :param object image:
         """
         logHandler.info(f"Image has been received from the main window.")
-        Utils().cvImg2QPixmap(self.holoImgFullScn, image)
+        ImgProcess.cvImg2QPixmap(self.holoImgFullScn, image)
 
     def monitorDetection(self):
         """
@@ -1171,7 +1194,7 @@ class SecondMonitorWindow(QMainWindow):
 
 
 if __name__ == '__main__':
-    args = Utils().getCmdOpt()
+    args = Utils.getCmdOpt()
 
     logHandler = Utils().getLog(
         consoleLevel=args.cloglvl,
@@ -1180,7 +1203,7 @@ if __name__ == '__main__':
     )
 
     app = QApplication(sys.argv)
-    qInstallMessageHandler(exception_handler)
+    qInstallMessageHandler(Utils.exceptionHandler)
     window = MainWindow()
     window.showMaximized()
 

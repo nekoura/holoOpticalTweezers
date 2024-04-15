@@ -8,6 +8,8 @@ import numpy as np
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QMessageBox
+
 
 class Utils:
     """
@@ -126,22 +128,21 @@ class Utils:
         sys.__excepthook__(cls, exception, traceback)
 
     @staticmethod
+    def exceptionHandler(errtype, value, traceback):
+        # 捕获异步异常并显示错误消息
+        QMessageBox.critical(None, 'Error', f"{errtype}\n{value}\n{traceback}")
+
+
+class ImgProcess:
+    @staticmethod
     def loadImg(string):
         """
-        [工具类] 从文件加载图像
+        [图像处理] 从文件加载图像
 
         :param str string: 输入图像路径
         """
-        # img = cv2.imread(string)
         img = cv2.imdecode(np.fromfile(string, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
         if img is not None:
-            # if img.shape[2] > 1:
-            #     imgBW = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY, None)
-            #     # logHandler.debug('RGB image')
-            #     return imgBW
-            # else:
-            #     # logHandler.debug('Gray image')
-            #     return img
             return img
         else:
             raise IOError
@@ -149,7 +150,7 @@ class Utils:
     @staticmethod
     def cvImg2QPixmap(obj, inputImg):
         """
-        [工具类] 加载cv2图像到Qt界面
+        [图像处理] 加载cv2图像到Qt界面
 
         :param QObject obj: 目标Qt组件
         :param inputImg: 输入图像
@@ -179,3 +180,37 @@ class Utils:
             obj.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
         obj.setPixmap(scaledPixmap)
+
+    def createGaussianBeamMask(self, image, beamWidth: int):
+        """
+        [图像处理] 生成以指定位置为中心的高斯光束的遮罩
+        :param image: 输入图像
+        :param beamWidth: 光斑直径
+        """
+        circles = self.detectCircles(image)
+        size = image.shape[:2]
+        combinedMask = np.zeros(size, dtype=np.float32)
+
+        X, Y = np.meshgrid(np.arange(size[1]), np.arange(size[0]))
+
+        for x, y, r in circles:
+            rSquared = ((X - x) ** 2 + (Y - y) ** 2)
+            phase = np.exp(-rSquared / (2 * beamWidth ** 2))
+            combinedMask += phase
+
+        return combinedMask
+
+    @staticmethod
+    def detectCircles(image):
+        """
+        [图像处理] 使用霍夫变换在图像中检测圆形
+        """
+        circles = cv2.HoughCircles(
+            image, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20,
+            param1=50, param2=30, minRadius=20, maxRadius=40
+        )
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+            return circles
+        else:
+            return []

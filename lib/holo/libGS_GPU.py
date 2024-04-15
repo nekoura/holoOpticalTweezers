@@ -12,6 +12,7 @@ def GSiteration(maxIterNum: int, effThres: float, targetImg, uniList: list, effi
     :param effThres: 迭代目标（均匀性）
     :param targetImg: 目标图像
     :param uniList: 均匀性记录
+    :param effiList: 光场效率记录
     :return: 相位, 归一化光强
     :rtype: tuple
     """
