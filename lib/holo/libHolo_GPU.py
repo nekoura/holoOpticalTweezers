@@ -1,19 +1,17 @@
 import cupy as cp
 
 
-def uniformityCalc(intensity, target) -> float:
+def uniformityCalc(normIntensity, target) -> float:
     """
-    均匀性评价，达到一定值后终止迭代(See Eq.4-2)
+    均匀性评价
 
-    :param intensity: 输入光场强度
+    :param normIntensity: 归一化光场强度
     :param target: 目标图像
     :return 均匀性
     :rtype: float
     """
-    intensity = intensity / cp.max(intensity)
-
-    maxI = cp.max(intensity[target == 1])
-    minI = cp.min(intensity[target == 1])
+    maxI = cp.max(normIntensity[target == 1])
+    minI = cp.min(normIntensity[target == 1])
 
     uniformity = float(1 - (maxI - minI) / (maxI + minI))
 
@@ -32,6 +30,13 @@ def efficiencyCalc(normIntensity, target) -> float:
     efficiency = cp.sum(normIntensity[target == 1]) / cp.sum(target[target == 1])
 
     return float(efficiency)
+
+
+def RMSECalc(normIntensity, target) -> float:
+    RMSE = cp.sqrt(
+        cp.sum(cp.abs(normIntensity) ** 2 - cp.abs(target) ** 2) ** 2 / cp.sum(cp.abs(target) ** 2) ** 2
+    )
+    return float(RMSE)
 
 
 def normalize(img):

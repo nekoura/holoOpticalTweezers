@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         self.binarizedImg = None
         self._uniList = []
         self._effiList = []
+        self._RMSEList = []
 
         self._pressed = False
         self._lastX = 0
@@ -585,6 +586,7 @@ class MainWindow(QMainWindow):
 
             self._uniList.clear()
             self._effiList.clear()
+            self._RMSEList.clear()
 
             maxIterNum = self.maxIterNumInput.value()
             uniThres = self.effThresNumInput.value()
@@ -599,21 +601,19 @@ class MainWindow(QMainWindow):
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
                     u, phase = gsw.GSiteration(
-                        maxIterNum, uniThres, target, self._uniList, self._effiList
+                        target, maxIterNum, uniThres, self._uniList, self._effiList, self._RMSEList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
                     u, phase = wcia.WCIAiteration(
-                        maxIterNum, uniThres, target, self._uniList, self._effiList
+                        target, maxIterNum, uniThres, self._uniList, self._effiList, self._RMSEList
                     )
             except Exception as err:
                 logHandler.error(f"Err in GSiteration: {err}")
                 QMessageBox.critical(self, '错误', f'GS迭代过程中发生异常：\n{err}')
                 self.statusBar.showMessage(f"GS迭代过程中发生异常: {err}")
             else:
-                holo = Holo.genHologram(phase)
-
                 # CuPy类型转换 (CuPy->NumPy)
-                self.holoImg = cp.asnumpy(holo)
+                self.holoImg = cp.asnumpy(Holo.genHologram(phase))
                 self.holoU = cp.asnumpy(u)
 
                 self.holoImgRotated = cv2.rotate(
@@ -636,17 +636,18 @@ class MainWindow(QMainWindow):
                 duration = round(tEnd - tStart, 2)
                 uniformity = self._uniList[-1]
                 efficiency = self._effiList[-1]
+                RMSE = self._RMSEList[-1]
 
                 self.iterationDraw()
 
                 logHandler.info(f"Finish Calculation.")
                 logHandler.info(
                     f"Iteration={iteration}, Duration={duration}s, "
-                    f"uniformity={uniformity}, efficiency={efficiency}"
+                    f"uniformity={uniformity}, efficiency={efficiency}, RMSE={RMSE}"
                 )
                 self.statusBar.showMessage(
                     f"计算完成。迭代{iteration}次，时长 {duration}s，"
-                    f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}"
+                    f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}, RMSE={round(RMSE, 4)}"
                 )
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(1)
@@ -892,9 +893,10 @@ class MainWindow(QMainWindow):
                     xVal = xData[x_index - 1]
                     yUni = self._uniList[x_index - 1]
                     yEffi = self._effiList[x_index - 1]
+                    yRMSE = self._RMSEList[x_index - 1]
 
                     # 格式化坐标数据
-                    xyText = f"X={xVal:.2f}\nUni={yUni:.2f}\nEffi={yEffi:.2f}"
+                    xyText = f"X={xVal:}\nUni={yUni:.4f}\nEffi={yEffi:.4f}\nRMSE={yRMSE:.4f}"
 
                     # 更新文本对象的内容
                     iterText.set_text(xyText)
@@ -915,6 +917,9 @@ class MainWindow(QMainWindow):
                     crossPtE.set_data([xVal, xVal], [yEffi, yEffi])
                     crossPtE.set_visible(True)
 
+                    crossPtR.set_data([xVal, xVal], [yRMSE, yRMSE])
+                    crossPtR.set_visible(True)
+
                     self.iterationHistory.canvas.draw()  # 重绘画布
 
                     # 更新状态栏的显示
@@ -925,6 +930,7 @@ class MainWindow(QMainWindow):
                     vline.set_visible(False)
                     crossPtU.set_visible(False)
                     crossPtE.set_visible(False)
+                    crossPtR.set_visible(False)
                     self.iterationHistory.canvas.draw()
             else:
                 # 如果x不在数据范围内，则隐藏文本对象
@@ -932,6 +938,7 @@ class MainWindow(QMainWindow):
                 vline.set_visible(False)
                 crossPtU.set_visible(False)
                 crossPtE.set_visible(False)
+                crossPtR.set_visible(False)
                 self.iterationHistory.canvas.draw()
 
         self.iterationHistory.clf()
@@ -943,6 +950,7 @@ class MainWindow(QMainWindow):
 
         iterationPlot.plot(xData, self._uniList, label='Uniformity')
         iterationPlot.plot(xData, self._effiList, label='efficiency')
+        iterationPlot.plot(xData, self._RMSEList, label='RMSE')
 
         iterationPlot.legend(loc='best', fontsize=8)
 
@@ -968,6 +976,9 @@ class MainWindow(QMainWindow):
 
         crossPtE = iterationPlot.plot([], [], 'o', color='C1', markersize=5)[0]
         crossPtE.set_visible(False)
+
+        crossPtR = iterationPlot.plot([], [], 'o', color='C2', markersize=5)[0]
+        crossPtR.set_visible(False)
 
         self.iterationHistory.tight_layout()
         self.iterationHistory.subplots_adjust(left=0.1, bottom=0.12)

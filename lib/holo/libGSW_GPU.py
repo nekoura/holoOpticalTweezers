@@ -5,15 +5,16 @@ import cupy as cp
 from lib.holo import libHolo_GPU as Holo
 
 
-def GSiteration(maxIterNum: int, effThres: float, targetImg, uniList: list, effiList: list) -> tuple:
+def GSiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, effiList: list, RMSEList: list) -> tuple:
     """
     GS迭代算法
 
+    :param targetImg: 目标图像
     :param maxIterNum: 最大迭代次数
     :param effThres: 迭代目标（均匀性）
-    :param targetImg: 目标图像
     :param uniList: 均匀性记录
     :param effiList: 光场效率记录
+    :param RMSEList: 均方根误差记录
     :return: 光场，相位
     :rtype: tuple
     """
@@ -55,12 +56,15 @@ def GSiteration(maxIterNum: int, effThres: float, targetImg, uniList: list, effi
         normIntensity = Holo.normalize(intensity)
 
         # 检查生成光场的均匀度
-        uniformity = Holo.uniformityCalc(intensity, targetImg)
+        uniformity = Holo.uniformityCalc(normIntensity, targetImg)
         uniList.append(uniformity)
 
         # 检查生成光场的光能利用率
         efficiency = Holo.efficiencyCalc(normIntensity, targetImg)
         effiList.append(efficiency)
+
+        RMSE = Holo.RMSECalc(normIntensity, targetImg)
+        RMSEList.append(RMSE)
 
         uWeighted = GSaddWeight(uWeighted, targetImg, uTarget, normIntensity)
         uWeighted = Holo.normalize(uWeighted)
