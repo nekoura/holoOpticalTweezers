@@ -16,7 +16,9 @@ from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from lib.utils.utils import Utils, ImgProcess
-from lib.holo import libGS_GPU as libGS
+from lib.holo import libGSW_GPU as gsw
+from lib.holo import libWCIA_GPU as wcia
+from lib.holo import libHolo_GPU as Holo
 from lib.cam.camAPI import CameraMiddleware
 from lib.laser.laserAPI import LaserMiddleWare
 
@@ -108,6 +110,13 @@ class MainWindow(QMainWindow):
         inputImgGroupBox.setLayout(inputImgLayout)
 
         # 全息图计算功能区
+        holoAlgmText = QLabel("算法")
+
+        self.holoAlgmSel = QComboBox()
+        self.holoAlgmSel.addItem(f"GSW")
+        self.holoAlgmSel.addItem(f"WCIA")
+        self.holoAlgmSel.setEnabled(False)
+
         maxIterNumText = QLabel("最大迭代次数")
 
         self.maxIterNumInput = QSpinBox()
@@ -131,12 +140,14 @@ class MainWindow(QMainWindow):
         self.saveHoloBtn.setEnabled(False)
 
         calHoloLayout = QGridLayout()
-        calHoloLayout.addWidget(maxIterNumText, 0, 0, 1, 1)
-        calHoloLayout.addWidget(effThresNumText, 0, 1, 1, 1)
-        calHoloLayout.addWidget(self.maxIterNumInput, 1, 0, 1, 1)
-        calHoloLayout.addWidget(self.effThresNumInput, 1, 1, 1, 1)
-        calHoloLayout.addWidget(self.calcHoloBtn, 2, 0, 1, 1)
-        calHoloLayout.addWidget(self.saveHoloBtn, 2, 1, 1, 1)
+        calHoloLayout.addWidget(holoAlgmText, 0, 0, 1, 1)
+        calHoloLayout.addWidget(self.holoAlgmSel, 0, 1, 1, 1)
+        calHoloLayout.addWidget(maxIterNumText, 1, 0, 1, 1)
+        calHoloLayout.addWidget(effThresNumText, 1, 1, 1, 1)
+        calHoloLayout.addWidget(self.maxIterNumInput, 2, 0, 1, 1)
+        calHoloLayout.addWidget(self.effThresNumInput, 2, 1, 1, 1)
+        calHoloLayout.addWidget(self.calcHoloBtn, 3, 0, 1, 1)
+        calHoloLayout.addWidget(self.saveHoloBtn, 3, 1, 1, 1)
         calHoloLayout.setColumnStretch(0, 1)
         calHoloLayout.setColumnStretch(1, 1)
 
@@ -267,10 +278,6 @@ class MainWindow(QMainWindow):
         holoImgWidget = QWidget()
         holoImgWidget.setLayout(holoImgVLayout)
 
-        self.holoImgPreviewTabWidget = QTabWidget()
-        self.holoImgPreviewTabWidget.addTab(targetImgWidget, "目标图")
-        self.holoImgPreviewTabWidget.addTab(holoImgWidget, "全息图")
-
         # 重建光场仿真显示区域
         self.reconstructImgPreview = QLabel()
         self.reconstructImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
@@ -284,25 +291,24 @@ class MainWindow(QMainWindow):
         reconstructImgWidget = QWidget()
         reconstructImgWidget.setLayout(reconstructImgVLayout)
 
+        self.holoImgPreviewTabWidget = QTabWidget()
+        self.holoImgPreviewTabWidget.addTab(targetImgWidget, "目标图")
+        self.holoImgPreviewTabWidget.addTab(holoImgWidget, "全息图")
+        self.holoImgPreviewTabWidget.addTab(reconstructImgWidget, "重建光场")
+        self.holoImgPreviewTabWidget.setTabEnabled(2, False)
+
         # 重建光场相位分布显示区域
         self.reconstructPhase2D = Figure()
         reconstructPhase2DCanvas = FigureCanvas(self.reconstructPhase2D)
-
-        self.reconstructPhase3D = Figure()
-        reconstructPhase3DCanvas = FigureCanvas(self.reconstructPhase3D)
 
         # GS迭代历史显示区域
         self.iterationHistory = Figure()
         iterationHistoryCanvas = FigureCanvas(self.iterationHistory)
 
         self.reconstructViewTabWidget = QTabWidget()
-        self.reconstructViewTabWidget.addTab(reconstructImgWidget, "重建仿真")
-        self.reconstructViewTabWidget.addTab(reconstructPhase2DCanvas, "重建相位2D")
-        self.reconstructViewTabWidget.addTab(reconstructPhase3DCanvas, "重建相位3D")
         self.reconstructViewTabWidget.addTab(iterationHistoryCanvas, "迭代历史")
+        self.reconstructViewTabWidget.addTab(reconstructPhase2DCanvas, "重建相位")
         self.reconstructViewTabWidget.setTabEnabled(1, False)
-        self.reconstructViewTabWidget.setTabEnabled(2, False)
-        self.reconstructViewTabWidget.setTabEnabled(3, False)
 
         imgViewAreaLayout = QGridLayout()
         imgViewAreaLayout.addWidget(camPreviewGroupBox, 0, 1, 2, 1)
@@ -473,6 +479,26 @@ class MainWindow(QMainWindow):
 
             logHandler.debug(f"Snap Signal send. Initiator=User Mode=target)")
 
+    def autoExpSet(self, state):
+        """
+        [UI操作] 处理用户设置自动曝光状态
+        """
+        if self.cam.device:
+            self.cam.device.put_AutoExpoEnable(1 if state else 0)
+            logHandler.debug(f"Exp config send. Initiator=User")
+            self.expTimeInput.setEnabled(not state)
+            logHandler.debug(f"UI thread updated. Initiator=User  Mode=refresh")
+
+    def expTimeSet(self, value):
+        """
+        [UI操作] 处理用户设置曝光时间状态
+        """
+        if self.cam.device:
+            self.cam.device.put_ExpoAGain(100)
+            if not self.autoExpChk.isChecked():
+                self.cam.device.put_ExpoTime(int(value) * 1000)
+                logHandler.debug(f"Exp config send. Initiator=User")
+
     def openTargetImg(self):
         """
         [UI操作] 点击载入已有图像
@@ -524,6 +550,9 @@ class MainWindow(QMainWindow):
                     logHandler.info(f"Light field {Path(imgDir).parent / Path(imgDir).stem}.npy loaded.")
 
     def saveHoloImg(self):
+        """
+        [UI操作] 保存全息图
+        """
         if self.holoImg is not None:
             try:
                 imgDir, imgType = QFileDialog.getSaveFileName(
@@ -539,58 +568,6 @@ class MainWindow(QMainWindow):
                     self.statusBar.showMessage(f"保存成功。图片位于{imgDir}，并在目录中存储了同名.npy文件。"
                                                f"该文件包含光场信息，请与图像一同妥善保存，切勿更名。")
                     logHandler.info(f"Holo image saved at {imgDir}")
-
-    def autoExpSet(self, state):
-        """
-        [UI操作] 处理用户设置自动曝光状态
-        """
-        if self.cam.device:
-            self.cam.device.put_AutoExpoEnable(1 if state else 0)
-            logHandler.debug(f"Exp config send. Initiator=User")
-            self.expTimeInput.setEnabled(not state)
-            logHandler.debug(f"UI thread updated. Initiator=User  Mode=refresh")
-
-    def expTimeSet(self, value):
-        """
-        [UI操作] 处理用户设置曝光时间状态
-        """
-        if self.cam.device:
-            self.cam.device.put_ExpoAGain(100)
-            if not self.autoExpChk.isChecked():
-                self.cam.device.put_ExpoTime(int(value) * 1000)
-                logHandler.debug(f"Exp config send. Initiator=User")
-
-    # def onBinarizeImgBtnClicked(self):
-    #     """
-    #     (WIP)[UI操作] 对待处理图像二值化
-    #
-    #     todo: 解决二值化效果不佳
-    #     """
-    #     if self.pendingImg is not None:
-    #         # 还原原图
-    #         if self._isBinarized:
-    #             ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
-    #             self.binarizeImgBtn.setText("二值化原图")
-    #             self.statusBar.showMessage(f"已还原原图")
-    #             self._isBinarized = False
-    #             logHandler.info(f"Image has been restored.")
-    #         # 二值化原图
-    #         else:
-    #             try:
-    #                 self.binarizedImg = cv2.threshold(
-    #                     self.pendingImg, 127, 255, cv2.THRESH_BINARY
-    #                 )
-    #                 # self.binarizedImg = cv2.adaptiveThreshold(
-    #                 #     self.pendingImg, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    #                 # )
-    #             except Exception as err:
-    #                 logHandler.error(f"Fail to binarize image: {err}")
-    #             else:
-    #                 ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.binarizedImg)
-    #                 self.binarizeImgBtn.setText("还原原图")
-    #                 self.statusBar.showMessage(f"已二值化图像")
-    #                 self._isBinarized = True
-    #                 logHandler.info(f"Image has been binarized.")
 
     def calcHoloImg(self):
         """
@@ -620,15 +597,20 @@ class MainWindow(QMainWindow):
             # 计时
             tStart = time.time()
             try:
-                u, phase, normIntensity = libGS.GSiteration(
-                    maxIterNum, uniThres, target, self._uniList, self._effiList
-                )
+                if self.holoAlgmSel.currentIndex() == 0:
+                    u, phase = gsw.GSiteration(
+                        maxIterNum, uniThres, target, self._uniList, self._effiList
+                    )
+                elif self.holoAlgmSel.currentIndex() == 1:
+                    u, phase = wcia.WCIAiteration(
+                        maxIterNum, uniThres, target, self._uniList, self._effiList
+                    )
             except Exception as err:
                 logHandler.error(f"Err in GSiteration: {err}")
                 QMessageBox.critical(self, '错误', f'GS迭代过程中发生异常：\n{err}')
                 self.statusBar.showMessage(f"GS迭代过程中发生异常: {err}")
             else:
-                holo = libGS.genHologram(phase)
+                holo = Holo.genHologram(phase)
 
                 # CuPy类型转换 (CuPy->NumPy)
                 self.holoImg = cp.asnumpy(holo)
@@ -734,18 +716,21 @@ class MainWindow(QMainWindow):
                 ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, None)
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(0)
+                self.holoImgPreviewTabWidget.setTabEnabled(2, False)
                 self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
                 self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
 
                 self._isBinarized = False
 
                 self.calcHoloBtn.setEnabled(True)
+                self.holoAlgmSel.setEnabled(True)
                 self.maxIterNumInput.setEnabled(True)
                 self.effThresNumInput.setEnabled(True)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, False)
-                self.reconstructViewTabWidget.setTabEnabled(2, False)
-                self.reconstructViewTabWidget.setTabEnabled(3, False)
+
+                self.iterationHistory.clf()
+                self.iterationHistory.canvas.draw()
 
             self.saveHoloBtn.setEnabled(False)
             logHandler.debug(f"UI thread updated. Initiator=User  Mode=refresh")
@@ -763,6 +748,7 @@ class MainWindow(QMainWindow):
                 self.reconstructResult(self.holoU, 50, 532e-6)
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(1)
+                self.holoImgPreviewTabWidget.setTabEnabled(2, True)
                 self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
 
                 self.holoImgRotated = cv2.rotate(
@@ -774,12 +760,14 @@ class MainWindow(QMainWindow):
                 self._isBinarized = False
 
                 self.calcHoloBtn.setEnabled(False)
+                self.holoAlgmSel.setEnabled(False)
                 self.maxIterNumInput.setEnabled(False)
                 self.effThresNumInput.setEnabled(False)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, True)
-                self.reconstructViewTabWidget.setTabEnabled(2, True)
-                self.reconstructViewTabWidget.setTabEnabled(3, False)
+
+                self.iterationHistory.clf()
+                self.iterationHistory.canvas.draw()
         else:
             logHandler.warning(f"No image loaded. ")
 
@@ -849,34 +837,15 @@ class MainWindow(QMainWindow):
 
             self.reconstructPhase2D.canvas.draw()
 
-        def onScroll3D(event):
-            """
-            3D相位重建 鼠标滚动事件
-            """
-            axtemp = event.inaxes
-            xMin, xMax = axtemp.get_xlim()
-            yMin, yMax = axtemp.get_ylim()
-            zMin, zMax = axtemp.get_zlim()
-            xRange = (xMax - xMin) / 10
-            yRange = (yMax - yMin) / 10
-            zRange = (zMax - zMin) / 10
-            if event.button == 'up':
-                axtemp.set(xlim=(xMin + xRange, xMax - xRange))
-                axtemp.set(ylim=(yMin + yRange, yMax - yRange))
-                axtemp.set(zlim=(zMin + zRange, zMax - zRange))
-            elif event.button == 'down':
-                axtemp.set(xlim=(xMin - xRange, xMax + xRange))
-                axtemp.set(ylim=(yMin - yRange, yMax + yRange))
-                axtemp.set(zlim=(zMin - zRange, zMax + zRange))
-
-            self.reconstructPhase3D.canvas.draw()
+        self.holoImgPreviewTabWidget.setTabEnabled(2, True)
+        self.reconstructViewTabWidget.setTabEnabled(1, True)
 
         # 重建光场
-        result = libGS.reconstruct(holoU, d, wavelength)
-        ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, result.astype("uint8"))
+        reconstructU = Holo.reconstruct(holoU, d, wavelength)
+        reconstructA = Holo.normalize(np.abs(reconstructU)) * 255
+        reconstructP = np.where(np.angle(reconstructU) < 0, np.angle(reconstructU) + 2 * np.pi, np.angle(reconstructU))
 
-        self.reconstructViewTabWidget.setTabEnabled(1, True)
-        self.reconstructViewTabWidget.setTabEnabled(2, True)
+        ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, reconstructA.astype("uint8"))
 
         # 重建相位
         self.reconstructPhase2D.clf()
@@ -887,15 +856,15 @@ class MainWindow(QMainWindow):
 
         phasePlot = self.reconstructPhase2D.add_subplot(111)
 
-        p = phasePlot.imshow(np.angle(holoU), cmap='RdYlGn')
+        p = phasePlot.imshow(reconstructP, cmap='RdYlGn')
 
         phasePlot.set_xticks([])
         phasePlot.set_yticks([])
 
         cb = self.reconstructPhase2D.colorbar(
             p, ax=phasePlot, orientation='horizontal', fraction=0.1, pad=0.03)
-        cb.set_ticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
-        cb.formatter = ticker.FixedFormatter(['-π', '-π/2', '0', 'π/2', 'π'])
+        cb.set_ticks([0, np.pi/2, np.pi, 3 * np.pi/2, 2 * np.pi])
+        cb.formatter = ticker.FixedFormatter(['0', 'π/2', 'π', '3π/2', '2π'])
         cb.ax.tick_params(labelsize=8)
 
         phasePlot.spines['right'].set_visible(False)
@@ -905,25 +874,6 @@ class MainWindow(QMainWindow):
 
         self.reconstructPhase2D.tight_layout()
         self.reconstructPhase2D.canvas.draw()
-
-        # 重建相位3D
-        self.reconstructPhase3D.clf()
-        self.reconstructPhase3D.canvas.mpl_connect('scroll_event', onScroll3D)
-
-        phasePlot3D = self.reconstructPhase3D.add_subplot(111, projection='3d')
-
-        x, y = np.meshgrid(range(np.angle(holoU).shape[1]), range(np.angle(holoU).shape[0]))
-
-        phasePlot3D.plot_surface(x, y, np.angle(holoU), cmap='viridis')
-
-        phasePlot3D.set_xticks([])
-        phasePlot3D.set_yticks([])
-        phasePlot3D.set_zticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi])
-        phasePlot3D.zaxis.set_major_formatter(ticker.FixedFormatter(['-π', '-π/2', '0', 'π/2', 'π']))
-
-        self.reconstructPhase3D.tight_layout()
-        self.reconstructPhase3D.subplots_adjust(left=-0.05)
-        self.reconstructPhase3D.canvas.draw()
 
     def iterationDraw(self):
         """
@@ -949,7 +899,8 @@ class MainWindow(QMainWindow):
                     # 更新文本对象的内容
                     iterText.set_text(xyText)
                     iterText.set_position(
-                        (mouseX - 0.1 * iterationPlot.get_xlim()[1], mouseY + 0.2)
+                        (mouseX - 0.1 * iterationPlot.get_xlim()[1],
+                         mouseY + 0.2 * iterationPlot.get_ylim()[1])
                     )
                     iterText.set_visible(True)  # 显示文本
 
@@ -982,8 +933,6 @@ class MainWindow(QMainWindow):
                 crossPtU.set_visible(False)
                 crossPtE.set_visible(False)
                 self.iterationHistory.canvas.draw()
-
-        self.reconstructViewTabWidget.setTabEnabled(3, True)
 
         self.iterationHistory.clf()
         self.iterationHistory.canvas.mpl_connect('motion_notify_event', figureHoverEventIter)
