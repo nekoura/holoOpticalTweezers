@@ -111,26 +111,39 @@ class MainWindow(QMainWindow):
         inputImgGroupBox.setLayout(inputImgLayout)
 
         # 全息图计算功能区
-        holoAlgmText = QLabel("算法")
+        holoAlgmText = QLabel("全息算法")
 
         self.holoAlgmSel = QComboBox()
-        self.holoAlgmSel.addItem(f"GSW")
+        self.holoAlgmSel.addItem(f"加权GS")
         self.holoAlgmSel.addItem(f"WCIA")
         self.holoAlgmSel.setEnabled(False)
 
-        maxIterNumText = QLabel("最大迭代次数")
+        initPhaseText = QLabel("初始相位")
+
+        self.initPhaseSel = QComboBox()
+        self.initPhaseSel.addItem(f"随机")
+        self.initPhaseSel.addItem(f"目标光场IFFT")
+        self.initPhaseSel.setEnabled(False)
+
+        maxIterNumText = QLabel("最大迭代")
 
         self.maxIterNumInput = QSpinBox()
         self.maxIterNumInput.setRange(0, 10000)
         self.maxIterNumInput.setValue(40)
         self.maxIterNumInput.setEnabled(False)
 
-        effThresNumText = QLabel("光能利用率阈值")
+        iterTargetText = QLabel("终止迭代条件")
 
-        self.effThresNumInput = QDoubleSpinBox()
-        self.effThresNumInput.setRange(0, 1)
-        self.effThresNumInput.setValue(0.95)
-        self.effThresNumInput.setEnabled(False)
+        self.iterTargetSel = QComboBox()
+        self.iterTargetSel.addItem(f"光能利用率 >=")
+        self.iterTargetSel.addItem(f"光场均匀度 >=")
+        self.iterTargetSel.addItem(f"均方根误差 <=")
+        self.iterTargetSel.setEnabled(False)
+
+        self.iterTargetInput = QDoubleSpinBox()
+        self.iterTargetInput.setRange(0, 1)
+        self.iterTargetInput.setValue(0.95)
+        self.iterTargetInput.setEnabled(False)
 
         self.calcHoloBtn = QPushButton('计算全息图')
         self.calcHoloBtn.clicked.connect(self.calcHoloImg)
@@ -142,15 +155,19 @@ class MainWindow(QMainWindow):
 
         calHoloLayout = QGridLayout()
         calHoloLayout.addWidget(holoAlgmText, 0, 0, 1, 1)
-        calHoloLayout.addWidget(self.holoAlgmSel, 0, 1, 1, 1)
-        calHoloLayout.addWidget(maxIterNumText, 1, 0, 1, 1)
-        calHoloLayout.addWidget(effThresNumText, 1, 1, 1, 1)
-        calHoloLayout.addWidget(self.maxIterNumInput, 2, 0, 1, 1)
-        calHoloLayout.addWidget(self.effThresNumInput, 2, 1, 1, 1)
-        calHoloLayout.addWidget(self.calcHoloBtn, 3, 0, 1, 1)
-        calHoloLayout.addWidget(self.saveHoloBtn, 3, 1, 1, 1)
+        calHoloLayout.addWidget(self.holoAlgmSel, 0, 1, 1, 2)
+        calHoloLayout.addWidget(initPhaseText, 1, 0, 1, 1)
+        calHoloLayout.addWidget(self.initPhaseSel, 1, 1, 1, 2)
+        calHoloLayout.addWidget(maxIterNumText, 2, 0, 1, 1)
+        calHoloLayout.addWidget(self.maxIterNumInput, 2, 1, 1, 2)
+        calHoloLayout.addWidget(iterTargetText, 3, 0, 1, 3)
+        calHoloLayout.addWidget(self.iterTargetSel, 4, 0, 1, 2)
+        calHoloLayout.addWidget(self.iterTargetInput, 4, 2, 1, 1)
+        calHoloLayout.addWidget(self.calcHoloBtn, 5, 0, 1, 3)
+        calHoloLayout.addWidget(self.saveHoloBtn, 6, 0, 1, 3)
         calHoloLayout.setColumnStretch(0, 1)
         calHoloLayout.setColumnStretch(1, 1)
+        calHoloLayout.setColumnStretch(2, 1)
 
         calHoloGroupBox = QGroupBox("全息图计算")
         calHoloGroupBox.setLayout(calHoloLayout)
@@ -589,7 +606,7 @@ class MainWindow(QMainWindow):
             self._RMSEList.clear()
 
             maxIterNum = self.maxIterNumInput.value()
-            uniThres = self.effThresNumInput.value()
+            iterTarget = self.iterTargetInput.value()
 
             targetNormalized = self.targetImg / 255
 
@@ -601,11 +618,21 @@ class MainWindow(QMainWindow):
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
                     u, phase = gsw.GSiteration(
-                        target, maxIterNum, uniThres, self._uniList, self._effiList, self._RMSEList
+                        target, maxIterNum,
+                        initPhase=(self.initPhaseSel.currentIndex(), None),
+                        iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
+                        uniList=self._uniList,
+                        effiList=self._effiList,
+                        RMSEList=self._RMSEList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
                     u, phase = wcia.WCIAiteration(
-                        target, maxIterNum, uniThres, self._uniList, self._effiList, self._RMSEList
+                        target, maxIterNum,
+                        initPhase=(self.initPhaseSel.currentIndex(), None),
+                        iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
+                        uniList=self._uniList,
+                        effiList=self._effiList,
+                        RMSEList=self._RMSEList
                     )
             except Exception as err:
                 logHandler.error(f"Err in GSiteration: {err}")
@@ -650,7 +677,7 @@ class MainWindow(QMainWindow):
                     f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}, RMSE={round(RMSE, 4)}"
                 )
 
-                self.holoImgPreviewTabWidget.setCurrentIndex(1)
+                self.holoImgPreviewTabWidget.setCurrentIndex(2)
         else:
             self.statusBar.showMessage(f"未载入目标图")
             logHandler.warning(f"No target image loaded. ")
@@ -725,8 +752,10 @@ class MainWindow(QMainWindow):
 
                 self.calcHoloBtn.setEnabled(True)
                 self.holoAlgmSel.setEnabled(True)
+                self.initPhaseSel.setEnabled(True)
                 self.maxIterNumInput.setEnabled(True)
-                self.effThresNumInput.setEnabled(True)
+                self.iterTargetSel.setEnabled(True)
+                self.iterTargetInput.setEnabled(True)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, False)
 
@@ -762,8 +791,10 @@ class MainWindow(QMainWindow):
 
                 self.calcHoloBtn.setEnabled(False)
                 self.holoAlgmSel.setEnabled(False)
+                self.initPhaseSel.setEnabled(False)
                 self.maxIterNumInput.setEnabled(False)
-                self.effThresNumInput.setEnabled(False)
+                self.iterTargetSel.setEnabled(False)
+                self.iterTargetInput.setEnabled(False)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, True)
 

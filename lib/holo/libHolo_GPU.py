@@ -1,7 +1,7 @@
 import cupy as cp
 
 
-def uniformityCalc(normIntensity, target) -> float:
+def uniformityCalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
     """
     均匀性评价
 
@@ -18,7 +18,7 @@ def uniformityCalc(normIntensity, target) -> float:
     return uniformity
 
 
-def efficiencyCalc(normIntensity, target) -> float:
+def efficiencyCalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
     """
     光场利用率评价
 
@@ -32,14 +32,14 @@ def efficiencyCalc(normIntensity, target) -> float:
     return float(efficiency)
 
 
-def RMSECalc(normIntensity, target) -> float:
+def RMSECalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
     RMSE = cp.sqrt(
         cp.sum(cp.abs(normIntensity) ** 2 - cp.abs(target) ** 2) ** 2 / cp.sum(cp.abs(target) ** 2) ** 2
     )
     return float(RMSE)
 
 
-def normalize(img):
+def normalize(img: cp.ndarray):
     """
     归一化
 
@@ -49,7 +49,7 @@ def normalize(img):
     return (img - cp.min(img)) / (cp.max(img) - cp.min(img))
 
 
-def genHologram(phase):
+def genHologram(phase: cp.ndarray):
     """
     自相位生成全息图
 
@@ -64,7 +64,7 @@ def genHologram(phase):
     return holo
 
 
-def reconstruct(holoU, d, wavelength):
+def reconstruct(holoU: cp.ndarray, d: float, wavelength: float):
     """
     重建光场还原
 

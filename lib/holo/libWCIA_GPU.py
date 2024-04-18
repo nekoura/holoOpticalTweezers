@@ -4,30 +4,36 @@ import cupy as cp
 from lib.holo import libHolo_GPU as Holo
 
 
-def WCIAiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, effiList: list, RMSEList: list) -> tuple:
+def WCIAiteration(targetImg: cp.ndarray, maxIterNum: int, **kwargs) -> tuple:
     """
     WCIA迭代算法
 
     :param targetImg: 目标图像
     :param maxIterNum: 最大迭代次数
-    :param effThres: 迭代目标（均匀性）
-    :param uniList: 均匀性记录
-    :param effiList: 光场效率记录
-    :param RMSEList: 均方根误差记录
+    :keyword initPhase: 初始相位 (mode, phase) type=tuple(int, cp.ndarray)
+    :keyword iterTarget: 迭代目标 (mode, val) type=tuple(int, float)
+    :keyword uniList: 均匀性记录 type=list
+    :keyword effiList: 光场效率记录 type=list
+    :keyword RMSEList: 均方根误差记录 type=list
     :return: 光场，相位
-    :rtype: tuple
+    :rtype: tuple(cupy.ndarray, cupy.ndarray)
     """
-    # (deprecated)初始迭代相位：以随机相位分布作为初始迭代相位
-    phase = cp.random.rand(targetImg.shape[0], targetImg.shape[1])
 
-    # (deprecated)初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性
-    # height, width = targetImg.shape[:2]
-    # initU = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
-    # phase = cp.angle(initU) + 2*cp.pi*(cp.random.uniform(0,1,(height, width))-0.5)/cp.sinc(cp.abs(initU)))
+    initPhase = kwargs.get('initPhase', (0, None))
+    iterTarget = kwargs.get('iterTarget', (0, 0.95))
+    uniList = kwargs.get('uniList', [])
+    effiList = kwargs.get('effiList', [])
+    RMSEList = kwargs.get('RMSEList', [])
 
-    # 初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性 v2
-    # todo:高斯面型
-    # phase = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
+    if initPhase[0] == 0:
+        # 初始迭代相位：以随机相位分布作为初始迭代相位
+        phase = cp.random.rand(targetImg.shape[0], targetImg.shape[1])
+    elif initPhase[0] == 1:
+        # 初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性 v2
+        phase = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
+    elif initPhase[0] == 2:
+        # 初始迭代相位：自定义相位 todo:高斯面型
+        phase = initPhase[1]
 
     # 初始化光场
     Atarget = targetImg
@@ -70,8 +76,18 @@ def WCIAiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, ef
         RMSE = Holo.RMSECalc(normIntensity, targetImg)
         RMSEList.append(RMSE)
 
-        if efficiency >= effThres:
-            break
+        if iterTarget[0] == 0:
+            # 光能利用率大于设置阈值
+            if efficiency >= iterTarget[1]:
+                break
+        if iterTarget[0] == 1:
+            # 均匀度大于设置阈值
+            if uniformity >= iterTarget[1]:
+                break
+        elif iterTarget[0] == 2:
+            # RMSE小于设置阈值
+            if RMSE <= iterTarget[1]:
+                break
 
     # 显存GC
     cp._default_memory_pool.free_all_blocks()
@@ -79,7 +95,7 @@ def WCIAiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, ef
     return aK, phase
 
 
-def WCIAcalAcon(Ak, AK, Atarget, bk):
+def WCIAcalAcon(Ak: cp.ndarray, AK: cp.ndarray, Atarget: cp.ndarray, bk: float) -> cp.ndarray:
     """
     向像平面光场添加强制振幅约束(See Eq.1)
 

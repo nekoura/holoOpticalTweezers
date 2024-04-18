@@ -5,30 +5,35 @@ import cupy as cp
 from lib.holo import libHolo_GPU as Holo
 
 
-def GSiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, effiList: list, RMSEList: list) -> tuple:
+def GSiteration(targetImg: cp.ndarray, maxIterNum: int, **kwargs) -> tuple:
     """
     GS迭代算法
 
     :param targetImg: 目标图像
     :param maxIterNum: 最大迭代次数
-    :param effThres: 迭代目标（均匀性）
-    :param uniList: 均匀性记录
-    :param effiList: 光场效率记录
-    :param RMSEList: 均方根误差记录
+    :keyword initPhase: 初始相位 (mode, phase) type=tuple(int, cp.ndarray)
+    :keyword iterTarget: 迭代目标 (mode, val) type=tuple(int, float)
+    :keyword uniList: 均匀性记录 type=list
+    :keyword effiList: 光场效率记录 type=list
+    :keyword RMSEList: 均方根误差记录 type=list
     :return: 光场，相位
-    :rtype: tuple
+    :rtype: tuple(cupy.ndarray, cupy.ndarray)
     """
-    # (deprecated)初始迭代相位：以随机相位分布作为初始迭代相位
-    # phase = cp.random.rand(height, width)
+    initPhase = kwargs.get('initPhase', (0, None))
+    iterTarget = kwargs.get('iterTarget', (0, 0.95))
+    uniList = kwargs.get('uniList', [])
+    effiList = kwargs.get('effiList', [])
+    RMSEList = kwargs.get('RMSEList', [])
 
-    # (deprecated)初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性
-    # height, width = targetImg.shape[:2]
-    # initU = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
-    # phase = cp.angle(initU) + 2*cp.pi*(cp.random.uniform(0,1,(height, width))-0.5)/cp.sinc(cp.abs(initU)))
-
-    # 初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性 v2
-    # todo:高斯面型
-    phase = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
+    if initPhase[0] == 0:
+        # 初始迭代相位：以随机相位分布作为初始迭代相位
+        phase = cp.random.rand(targetImg.shape[0], targetImg.shape[1])
+    elif initPhase[0] == 1:
+        # 初始迭代相位：以目标光场IFFT作为初始迭代相位以增强均匀性 v2
+        phase = cp.fft.ifftshift(cp.fft.ifft2(targetImg))
+    elif initPhase[0] == 2:
+        # 初始迭代相位：自定义相位 todo:高斯面型
+        phase = initPhase[1]
 
     # 光场复振幅：生成和target相同尺寸的空数组，必须是复数
     u = cp.empty_like(targetImg, dtype="complex")
@@ -80,8 +85,18 @@ def GSiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, effi
 
         phase = cp.angle(u)
 
-        if efficiency >= effThres:
-            break
+        if iterTarget[0] == 0:
+            # 光能利用率大于设置阈值
+            if efficiency >= iterTarget[1]:
+                break
+        if iterTarget[0] == 1:
+            # 均匀度大于设置阈值
+            if uniformity >= iterTarget[1]:
+                break
+        elif iterTarget[0] == 2:
+            # RMSE小于设置阈值
+            if RMSE <= iterTarget[1]:
+                break
 
     # 显存GC
     cp._default_memory_pool.free_all_blocks()
@@ -89,7 +104,7 @@ def GSiteration(targetImg, maxIterNum: int, effThres: float, uniList: list, effi
     return u, phase
 
 
-def GSaddWeight(uWeighted, target, uTarget, normIntensity):
+def GSaddWeight(uWeighted: cp.ndarray, target: cp.ndarray, uTarget: cp.ndarray, normIntensity: cp.ndarray):
     """
     向迭代光场添加权重(See Eq.19)
 
