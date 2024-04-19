@@ -1,85 +1,147 @@
 import cupy as cp
 
 
-def uniformityCalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
-    """
-    均匀性评价
+class Holo:
+    def __init__(self, targetImg: cp.ndarray, maxIterNum: int, **kwargs):
+        """
+        全息图生成 相关算法
 
-    :param normIntensity: 归一化光场强度
-    :param target: 目标图像
-    :return 均匀性
-    :rtype: float
-    """
-    maxI = cp.max(normIntensity[target == 1])
-    minI = cp.min(normIntensity[target == 1])
+        :param targetImg: 归一化目标图像
+        :param maxIterNum: 最大迭代次数
+        :keyword initPhase: 初始相位 (mode, phase) type=tuple(int, cp.ndarray)
+        :keyword iterTarget: 迭代目标 (mode, val) type=tuple(int, float)
+        :keyword uniList: 均匀性记录 type=list
+        :keyword effiList: 光场效率记录 type=list
+        :keyword RMSEList: 均方根误差记录 type=list
+        """
+        self.targetImg = targetImg
+        self.maxIterNum = maxIterNum
+        self.initPhase = kwargs.get('initPhase', (0, None))
+        self.iterTarget = kwargs.get('iterTarget', (0, 0.95))
+        self.normalizedA = None
+        self.uniList = kwargs.get('uniList', [])
+        self.effiList = kwargs.get('effiList', [])
+        self.RMSEList = kwargs.get('RMSEList', [])
 
-    uniformity = float(1 - (maxI - minI) / (maxI + minI))
+    def uniformityCalc(self):
+        """
+        均匀性评价
+        """
+        maxI = cp.max(self.normalizedA[self.targetImg == 1])
+        minI = cp.min(self.normalizedA[self.targetImg == 1])
 
-    return uniformity
+        uniformity = 1 - (maxI - minI) / (maxI + minI)
 
+        self.uniList.append(float(uniformity))
 
-def efficiencyCalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
-    """
-    光场利用率评价
+    def efficiencyCalc(self):
+        """
+        光场利用率评价
+        """
+        currentA = cp.sum(self.normalizedA[self.targetImg == 1])
+        targetA = cp.sum(self.targetImg[self.targetImg == 1])
 
-    :param normIntensity: 归一化光场强度
-    :param target: 目标图像
-    :return 光场利用率
-    :rtype: float
-    """
-    efficiency = cp.sum(normIntensity[target == 1]) / cp.sum(target[target == 1])
+        efficiency = currentA / targetA
 
-    return float(efficiency)
+        self.effiList.append(float(efficiency))
 
+    def RMSECalc(self):
+        """
+        均方根误差评价
+        """
+        retrievedI = cp.abs(self.normalizedA) ** 2
+        targetI = cp.abs(self.targetImg) ** 2
+        RMSE = cp.sqrt(
+            cp.sum(retrievedI - targetI) ** 2 / cp.sum(targetI) ** 2
+        )
+        self.RMSEList.append(float(RMSE))
 
-def RMSECalc(normIntensity: cp.ndarray, target: cp.ndarray) -> float:
-    RMSE = cp.sqrt(
-        cp.sum(cp.abs(normIntensity) ** 2 - cp.abs(target) ** 2) ** 2 / cp.sum(cp.abs(target) ** 2) ** 2
-    )
-    return float(RMSE)
+    def iterAnalyze(self) -> bool:
+        """
+        迭代指标评价
 
+        :return: 是否终止迭代
+        """
+        # 检查相位恢复结果的均匀度
+        self.uniformityCalc()
+        # 检查相位恢复结果的光能利用率
+        self.efficiencyCalc()
+        # 检查相位恢复结果的RMSE
+        self.RMSECalc()
 
-def normalize(img: cp.ndarray):
-    """
-    归一化
+        if self.iterTarget[0] == 0:
+            # 光能利用率大于设置阈值
+            if self.effiList[-1] >= self.iterTarget[1]:
+                return True
+        elif self.iterTarget[0] == 1:
+            # 均匀度大于设置阈值
+            if self.uniList[-1] >= self.iterTarget[1]:
+                return True
+        elif self.iterTarget[0] == 2:
+            # RMSE小于设置阈值
+            if self.RMSEList[-1] <= self.iterTarget[1]:
+                return True
 
-    :param img: 输入图像
-    :return: 归一化图像
-    """
-    return (img - cp.min(img)) / (cp.max(img) - cp.min(img))
+    def phaseInitialization(self) -> cp.array:
+        """
+        相位初始化
 
+        :return: 初始迭代相位
+        """
+        if self.initPhase[0] == 1:
+            # 以目标光场IFFT作为初始迭代相位以增强均匀性 v2
+            phase = cp.fft.ifftshift(cp.fft.ifft2(self.targetImg))
+        elif self.initPhase[0] == 2:
+            # 自定义相位 todo:高斯面型
+            phase = self.initPhase[1]
+        else:
+            # 以随机相位分布作为初始迭代相位 (默认）
+            phase = cp.random.rand(self.targetImg.shape[0], self.targetImg.shape[1])
 
-def genHologram(phase: cp.ndarray):
-    """
-    自相位生成全息图
+        return phase
 
-    :param phase: 输入相位
-    :return: 全息图
-    """
-    # 相位校正，相位为负+2pi，为正保持原样
-    phase = cp.where(phase < 0, phase + 2 * cp.pi, phase)
-    holo = normalize(phase) * 255
-    holo = holo.astype("uint8")
+    @staticmethod
+    def normalize(img: cp.ndarray):
+        """
+        归一化
 
-    return holo
+        :param img: 输入图像
+        :return: 归一化图像
+        :rtype: cp.ndarray
+        """
+        return (img - cp.min(img)) / (cp.max(img) - cp.min(img))
 
+    @staticmethod
+    def genHologram(phase: cp.ndarray):
+        """
+        自相位生成全息图
 
-def reconstruct(holoU: cp.ndarray, d: float, wavelength: float):
-    """
-    重建光场还原
+        :param phase: 输入相位
+        :return: 全息图
+        """
+        # 相位校正，相位为负+2pi，为正保持原样
+        phase = cp.where(phase < 0, phase + 2 * cp.pi, phase)
+        holoImg = Holo.normalize(phase) * 255
 
-    :param holoU: 全息图光场
-    :param d: 衍射距离
-    :param wavelength: 光源波长
-    :return: 重建光场
-    """
-    k = 2 * cp.pi / wavelength
-    H = cp.exp(1j * (k * d / wavelength))
-    uFFT = cp.fft.fftshift(
-        cp.fft.fft2(
-            cp.fft.fftshift(
-                cp.asarray(holoU)
+        return holoImg.astype("uint8")
+
+    @staticmethod
+    def reconstruct(holoU: cp.ndarray, d: float, wavelength: float):
+        """
+        重建光场还原
+
+        :param holoU: 全息图光场
+        :param d: 衍射距离
+        :param wavelength: 光源波长
+        :return: 重建光场
+        """
+        k = 2 * cp.pi / wavelength
+        H = cp.exp(1j * (k * d / wavelength))
+        uFFT = cp.fft.fftshift(
+            cp.fft.fft2(
+                cp.fft.fftshift(
+                    cp.asarray(holoU)
+                )
             )
         )
-    )
-    return cp.asnumpy(H * uFFT)
+        return cp.asnumpy(H * uFFT)

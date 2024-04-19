@@ -58,6 +58,11 @@ class Utils:
             required=False, help='Bypass LCOS detection (set current monitor as LCOS, for development only)'
         )
 
+        parser.add_argument(
+            '-l', '--bypass-laser', default=False, action='store_true',
+            required=False, help='Bypass Laser detection (if laser control is unnecessary)'
+        )
+
         args = parser.parse_args()
         return args
 

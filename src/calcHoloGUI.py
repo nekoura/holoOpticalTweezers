@@ -16,9 +16,9 @@ from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from lib.utils.utils import Utils, ImgProcess
-from lib.holo import libGSW_GPU as gsw
-from lib.holo import libWCIA_GPU as wcia
-from lib.holo import libHolo_GPU as Holo
+from lib.holo.libGSW_GPU import GSW
+from lib.holo.libWCIA_GPU import WCIA
+from lib.holo.libHolo_GPU import Holo
 from lib.cam.camAPI import CameraMiddleware
 from lib.laser.laserAPI import LaserMiddleWare
 
@@ -45,7 +45,6 @@ class MainWindow(QMainWindow):
         self.holoImg = None
         self.holoU = None
         self.holoImgRotated = None
-        self._isBinarized = False
         self._snapAsTarget = False
         self.binarizedImg = None
         self._uniList = []
@@ -62,16 +61,11 @@ class MainWindow(QMainWindow):
         self.cam.snapUpdate.connect(self.snapRefreshEvent)
         self.cam.expoUpdate.connect(self.expTimeUpdatedEvent)
 
-        # 激光器实例
-        self.laser = LaserMiddleWare()
-
         # 副屏实例通信
         self.secondWin = SecondMonitorWindow()
         self.holoImgReady.connect(self.secondWin.displayHoloImg)
 
         self._initUI()
-
-        self.deviceUpdatedEvent()
 
     def _initUI(self):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SLM Holograph Generator")
@@ -80,9 +74,6 @@ class MainWindow(QMainWindow):
         self.resize(1200, 600)
 
         # ==== 控制区域 ====
-        # self.binarizeImgBtn = QPushButton('二值化原图', self)
-        # self.binarizeImgBtn.clicked.connect(self.onBinarizeImgBtnClicked)
-        # self.binarizeImgBtn.setEnabled(False)
 
         # 输入功能区
         self.snapFromCamBtn = QPushButton('从相机捕获')
@@ -209,48 +200,14 @@ class MainWindow(QMainWindow):
         camCtrlGroupBox = QGroupBox("相机设置")
         camCtrlGroupBox.setLayout(camCtrlLayout)
 
-        # 激光器功能区
-        self.laserPortSel = QComboBox()
-        self.laserPortSel.setEnabled(False)
-
-        self.connectLaserBtn = QPushButton('连接控制盒')
-        self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
-        self.connectLaserBtn.setEnabled(False)
-
-        self.toggleLaserBtn = QPushButton('启动激光')
-        self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
-        self.toggleLaserBtn.setEnabled(False)
-
-        laserPwrText = QLabel("激光功率 (mW)")
-
-        self.laserPwrInput = QSpinBox()
-        self.laserPwrInput.setRange(0, 300)
-        self.laserPwrInput.setValue(10)
-        self.laserPwrInput.setEnabled(False)
-
-        self.setLaserPwrBtn = QPushButton('设定')
-        self.setLaserPwrBtn.clicked.connect(self.setLaserPwr)
-        self.setLaserPwrBtn.setEnabled(False)
-
-        laserCtrlLayout = QGridLayout()
-        laserCtrlLayout.addWidget(self.laserPortSel, 0, 0, 1, 2)
-        laserCtrlLayout.addWidget(self.connectLaserBtn, 1, 0, 1, 1)
-        laserCtrlLayout.addWidget(self.toggleLaserBtn, 1, 1, 1, 1)
-        laserCtrlLayout.addWidget(laserPwrText, 2, 0, 1, 2)
-        laserCtrlLayout.addWidget(self.laserPwrInput, 3, 0, 1, 1)
-        laserCtrlLayout.addWidget(self.setLaserPwrBtn, 3, 1, 1, 1)
-        laserCtrlLayout.setColumnStretch(0, 1)
-        laserCtrlLayout.setColumnStretch(1, 1)
-
-        laserCtrlGroupBox = QGroupBox("激光器设置")
-        laserCtrlGroupBox.setLayout(laserCtrlLayout)
-
         ctrlAreaLayout = QVBoxLayout()
         ctrlAreaLayout.addWidget(inputImgGroupBox)
         ctrlAreaLayout.addWidget(calHoloGroupBox)
         ctrlAreaLayout.addStretch(1)
         ctrlAreaLayout.addWidget(camCtrlGroupBox)
-        ctrlAreaLayout.addWidget(laserCtrlGroupBox)
+        if not any(arg == '-l' or arg == '--bypass-laser' for arg in sys.argv[1:]):
+            self._initLaserUI()
+            ctrlAreaLayout.addWidget(self.laserCtrlGroupBox)
 
         ctrlArea = QWidget()
         ctrlArea.setObjectName("ctrlArea")
@@ -354,6 +311,46 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.statusBar)
         self.statusBar.showMessage(f"就绪")
 
+    def _initLaserUI(self):
+        # 激光器功能区
+        self.laserPortSel = QComboBox()
+        self.laserPortSel.setEnabled(False)
+
+        self.connectLaserBtn = QPushButton('连接控制盒')
+        self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
+        self.connectLaserBtn.setEnabled(False)
+
+        self.toggleLaserBtn = QPushButton('启动激光')
+        self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
+        self.toggleLaserBtn.setEnabled(False)
+
+        laserPwrText = QLabel("激光功率 (mW)")
+
+        self.laserPwrInput = QSpinBox()
+        self.laserPwrInput.setRange(0, 300)
+        self.laserPwrInput.setValue(10)
+        self.laserPwrInput.setEnabled(False)
+
+        self.setLaserPwrBtn = QPushButton('设定')
+        self.setLaserPwrBtn.clicked.connect(self.setLaserPwr)
+        self.setLaserPwrBtn.setEnabled(False)
+
+        laserCtrlLayout = QGridLayout()
+        laserCtrlLayout.addWidget(self.laserPortSel, 0, 0, 1, 2)
+        laserCtrlLayout.addWidget(self.connectLaserBtn, 1, 0, 1, 1)
+        laserCtrlLayout.addWidget(self.toggleLaserBtn, 1, 1, 1, 1)
+        laserCtrlLayout.addWidget(laserPwrText, 2, 0, 1, 2)
+        laserCtrlLayout.addWidget(self.laserPwrInput, 3, 0, 1, 1)
+        laserCtrlLayout.addWidget(self.setLaserPwrBtn, 3, 1, 1, 1)
+        laserCtrlLayout.setColumnStretch(0, 1)
+        laserCtrlLayout.setColumnStretch(1, 1)
+
+        self.laserCtrlGroupBox = QGroupBox("激光器设置")
+        self.laserCtrlGroupBox.setLayout(laserCtrlLayout)
+
+        self.laser = LaserMiddleWare()
+        self.deviceUpdatedEvent()
+
     def closeEvent(self, event):
         """
         [UI事件] 窗口关闭时同时关闭其他窗口，关闭相机
@@ -363,7 +360,9 @@ class MainWindow(QMainWindow):
                 widget.close()
 
         self.cam.closeCamera()
-        self.laser.closeComPort()
+        if not any(arg == '-l' or arg == '--bypass-laser' for arg in sys.argv[1:]):
+            self.laser.closeComPort()
+
         logHandler.info(f"Bye.")
         event.accept()
 
@@ -590,13 +589,11 @@ class MainWindow(QMainWindow):
     def calcHoloImg(self):
         """
         [UI操作] 计算全息图
+        todo: SSIE, PSNR, 直方图
         """
         # 已载入图像
         if self.pendingImg is not None:
-            if self._isBinarized:
-                self.targetImg = self.binarizedImg
-            else:
-                self.targetImg = self.pendingImg
+            self.targetImg = self.pendingImg
 
             logHandler.info(f"Start Calculation.")
             self.statusBar.showMessage(f"开始计算...")
@@ -617,7 +614,7 @@ class MainWindow(QMainWindow):
             tStart = time.time()
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
-                    u, phase = gsw.GSiteration(
+                    iteration = GSW(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -626,7 +623,7 @@ class MainWindow(QMainWindow):
                         RMSEList=self._RMSEList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
-                    u, phase = wcia.WCIAiteration(
+                    iteration = WCIA(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -634,10 +631,12 @@ class MainWindow(QMainWindow):
                         effiList=self._effiList,
                         RMSEList=self._RMSEList
                     )
+
+                u, phase = iteration.iteration()
             except Exception as err:
-                logHandler.error(f"Err in GSiteration: {err}")
-                QMessageBox.critical(self, '错误', f'GS迭代过程中发生异常：\n{err}')
-                self.statusBar.showMessage(f"GS迭代过程中发生异常: {err}")
+                logHandler.error(f"Err in iteration: {err}")
+                QMessageBox.critical(self, '错误', f'迭代过程中发生异常：\n{err}')
+                self.statusBar.showMessage(f"迭代过程中发生异常: {err}")
             else:
                 # CuPy类型转换 (CuPy->NumPy)
                 self.holoImg = cp.asnumpy(Holo.genHologram(phase))
@@ -748,8 +747,6 @@ class MainWindow(QMainWindow):
                 self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
                 self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
 
-                self._isBinarized = False
-
                 self.calcHoloBtn.setEnabled(True)
                 self.holoAlgmSel.setEnabled(True)
                 self.initPhaseSel.setEnabled(True)
@@ -786,8 +783,6 @@ class MainWindow(QMainWindow):
                     cv2.ROTATE_90_COUNTERCLOCKWISE
                 )
                 self.holoImgReady.emit(self.holoImgRotated)
-
-                self._isBinarized = False
 
                 self.calcHoloBtn.setEnabled(False)
                 self.holoAlgmSel.setEnabled(False)
