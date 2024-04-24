@@ -10,6 +10,7 @@ class WCIA(Holo):
         初始化变量 (See Fig.3, Eq.1 and Eq.6)
 
         目标图像 A_target = self.Atarget
+        相位 φ = self.phase
         迭代k 图像平面（输入）复振幅  A_k = self.Ak
         迭代k 全息平面复振幅  a_k = self.ak
         迭代k 相位提取和振幅正则化后复振幅  a_k' = self.aK
@@ -21,10 +22,13 @@ class WCIA(Holo):
         super().__init__(targetImg, maxIterNum, **kwargs)
 
         self.Atarget = self.targetImg
-        self.Ak = self.Atarget * cp.exp(1j * self.phaseInitialization())
-        self.ak = None
-        self.aK = None
-        self.AK = None
+        self.phase = self.phaseInitialization()
+
+        self.Ak = self.Atarget * cp.exp(1j * self.phase)
+        self.ak = cp.empty_like(self.targetImg, dtype="complex")
+        self.aK = cp.empty_like(self.targetImg, dtype="complex")
+        self.AK = cp.empty_like(self.targetImg, dtype="complex")
+
         self.bk = 1e-8
         Eholo = 1
         H = self.targetImg.shape[0] * self.targetImg.shape[1]
@@ -42,12 +46,17 @@ class WCIA(Holo):
 
             self.AK = cp.fft.fftshift(cp.fft.fft2(self.aK))
 
-            self.calAcon()
+            # 向像平面光场添加强制振幅约束(See Eq.1)
+            self.Acon[self.signalRegion] = (
+                cp.abs(self.Ak[self.signalRegion]) *
+                (cp.abs(self.Atarget[self.signalRegion]) / cp.abs(self.AK[self.signalRegion])) ** self.bk
+            )
+            self.Acon[self.nonSigRegion] = cp.abs(self.Ak[self.nonSigRegion])
 
             self.Ak = self.Acon * (self.AK / cp.abs(self.AK))
             self.bk = cp.sqrt(self.bk)
 
-            phase = cp.angle(self.aK)
+            self.phase = cp.angle(self.aK)
 
             # I=|u|^2
             # intensity = cp.abs(AK) ** 2
@@ -60,12 +69,6 @@ class WCIA(Holo):
         # 显存GC
         cp._default_memory_pool.free_all_blocks()
 
-        return self.aK, phase
+        return self.aK, self.phase
 
-    def calAcon(self):
-        """
-        向像平面光场添加强制振幅约束(See Eq.1)
-        """
 
-        self.Acon[self.Atarget > 0] = cp.abs(self.Ak[self.Atarget > 0]) * (cp.abs(self.Atarget[self.Atarget > 0]) / cp.abs(self.AK[self.Atarget > 0])) ** self.bk
-        self.Acon[self.Atarget == 0] = cp.abs(self.Ak[self.Atarget == 0])

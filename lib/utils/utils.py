@@ -54,12 +54,12 @@ class Utils:
         )
 
         parser.add_argument(
-            '-b', '--bypass-LCOS-detection', default=False, action='store_true',
+            '-bs', '--bypass-LCOS-detection', default=False, action='store_true',
             required=False, help='Bypass LCOS detection (set current monitor as LCOS, for development only)'
         )
 
         parser.add_argument(
-            '-l', '--bypass-laser', default=False, action='store_true',
+            '-bl', '--bypass-laser-detection', default=False, action='store_true',
             required=False, help='Bypass Laser detection (if laser control is unnecessary)'
         )
 
@@ -83,7 +83,8 @@ class Utils:
 
         return path
 
-    def getLog(self, consoleLevel=logging.WARNING, fileLevel=logging.DEBUG, writeLogFile=False):
+    @staticmethod
+    def getLog(consoleLevel=logging.WARNING, fileLevel=logging.DEBUG, writeLogFile=False):
         """
         [工具类] log组件
 
@@ -116,7 +117,7 @@ class Utils:
         # log打印到文件
         if writeLogFile is True:
             logFileHandler = logging.FileHandler(
-                filename=self.folderPathCheck(f"../log/log_{time.strftime('%Y%m%d%H%M%S')}.txt"),
+                filename=Utils.folderPathCheck(f"../log/log_{time.strftime('%Y%m%d%H%M%S')}.txt"),
                 encoding='utf8'
             )
             logFileHandler.setLevel(fileLevel)

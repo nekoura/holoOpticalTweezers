@@ -123,17 +123,17 @@ class MainWindow(QMainWindow):
         self.maxIterNumInput.setValue(40)
         self.maxIterNumInput.setEnabled(False)
 
-        iterTargetText = QLabel("终止迭代条件")
+        iterTargetText = QLabel("终止迭代条件（%）")
 
         self.iterTargetSel = QComboBox()
+        self.iterTargetSel.addItem(f"均方根误差 <=")
         self.iterTargetSel.addItem(f"光能利用率 >=")
         self.iterTargetSel.addItem(f"光场均匀度 >=")
-        self.iterTargetSel.addItem(f"均方根误差 <=")
         self.iterTargetSel.setEnabled(False)
 
         self.iterTargetInput = QDoubleSpinBox()
-        self.iterTargetInput.setRange(0, 1)
-        self.iterTargetInput.setValue(0.95)
+        self.iterTargetInput.setRange(0, 100)
+        self.iterTargetInput.setValue(1)
         self.iterTargetInput.setEnabled(False)
 
         self.calcHoloBtn = QPushButton('计算全息图')
@@ -205,9 +205,11 @@ class MainWindow(QMainWindow):
         ctrlAreaLayout.addWidget(calHoloGroupBox)
         ctrlAreaLayout.addStretch(1)
         ctrlAreaLayout.addWidget(camCtrlGroupBox)
-        if not any(arg == '-l' or arg == '--bypass-laser' for arg in sys.argv[1:]):
+        if not any(arg == '-bl' or arg == '--bypass-laser-detection' for arg in sys.argv[1:]):
             self._initLaserUI()
             ctrlAreaLayout.addWidget(self.laserCtrlGroupBox)
+        else:
+            logHandler.warning("Bypass laser detection mode, laser control component will not be loaded.")
 
         ctrlArea = QWidget()
         ctrlArea.setObjectName("ctrlArea")
@@ -360,7 +362,7 @@ class MainWindow(QMainWindow):
                 widget.close()
 
         self.cam.closeCamera()
-        if not any(arg == '-l' or arg == '--bypass-laser' for arg in sys.argv[1:]):
+        if not any(arg == '-bl' or arg == '--bypass-laser-detection' for arg in sys.argv[1:]):
             self.laser.closeComPort()
 
         logHandler.info(f"Bye.")
@@ -603,7 +605,7 @@ class MainWindow(QMainWindow):
             self._RMSEList.clear()
 
             maxIterNum = self.maxIterNumInput.value()
-            iterTarget = self.iterTargetInput.value()
+            iterTarget = self.iterTargetInput.value() * 0.01
 
             targetNormalized = self.targetImg / 255
 
@@ -1132,7 +1134,7 @@ class SecondMonitorWindow(QMainWindow):
             logHandler.info(f"Monitor {self._selMonIndex} selected.")
 
         else:
-            if any(arg == '-b' or arg == '--bypass-LCOS-detection' for arg in sys.argv[1:]):
+            if any(arg == '-bs' or arg == '--bypass-LCOS-detection' for arg in sys.argv[1:]):
                 self.setGeometry(screens[0].geometry().x(), screens[0].geometry().y(),
                                  screens[0].size().width(), screens[0].size().height())
                 logHandler.warning(f"Bypass LCOS detection mode, current monitor selected.")
@@ -1202,7 +1204,7 @@ class SecondMonitorWindow(QMainWindow):
 if __name__ == '__main__':
     args = Utils.getCmdOpt()
 
-    logHandler = Utils().getLog(
+    logHandler = Utils.getLog(
         consoleLevel=args.cloglvl,
         fileLevel=args.floglvl,
         writeLogFile=(args.floglvl > 0)
