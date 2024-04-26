@@ -23,6 +23,9 @@ class Holo:
         self.effiList = kwargs.get('effiList', [])
         self.RMSEList = kwargs.get('RMSEList', [])
 
+        self.signalRegion = self.targetImg > 0
+        self.nonSigRegion = self.targetImg == 0
+
     def uniformityCalc(self):
         """
         均匀性评价
@@ -38,8 +41,8 @@ class Holo:
         """
         光场利用率评价
         """
-        currentA = cp.sum(self.normalizedA[self.targetImg == 1])
-        targetA = cp.sum(self.targetImg[self.targetImg == 1])
+        currentA = cp.sum(self.normalizedA[self.targetImg > 0])
+        targetA = cp.sum(self.targetImg[self.targetImg > 0])
 
         efficiency = currentA / targetA
 
@@ -60,6 +63,8 @@ class Holo:
         """
         迭代指标评价
 
+        todo: SSIM PSNR
+
         :return: 是否终止迭代
         """
         # 检查相位恢复结果的均匀度
@@ -70,16 +75,16 @@ class Holo:
         self.RMSECalc()
 
         if self.iterTarget[0] == 0:
+            # RMSE小于设置阈值
+            if self.RMSEList[-1] <= self.iterTarget[1]:
+                return True
+        elif self.iterTarget[0] == 1:
             # 光能利用率大于设置阈值
             if self.effiList[-1] >= self.iterTarget[1]:
                 return True
-        elif self.iterTarget[0] == 1:
+        elif self.iterTarget[0] == 2:
             # 均匀度大于设置阈值
             if self.uniList[-1] >= self.iterTarget[1]:
-                return True
-        elif self.iterTarget[0] == 2:
-            # RMSE小于设置阈值
-            if self.RMSEList[-1] <= self.iterTarget[1]:
                 return True
 
     def phaseInitialization(self) -> cp.array:
