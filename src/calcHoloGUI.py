@@ -106,6 +106,8 @@ class MainWindow(QMainWindow):
         self.holoAlgmSel = QComboBox()
         self.holoAlgmSel.addItem(f"加权GS")
         self.holoAlgmSel.addItem(f"WCIA")
+        self.holoAlgmSel.addItem(f"MRAF")
+        self.holoAlgmSel.addItem(f"PhaseOnly")
         self.holoAlgmSel.setEnabled(False)
 
         initPhaseText = QLabel("初始相位")
@@ -113,6 +115,7 @@ class MainWindow(QMainWindow):
         self.initPhaseSel = QComboBox()
         self.initPhaseSel.addItem(f"随机")
         self.initPhaseSel.addItem(f"目标光场IFFT")
+        self.initPhaseSel.addItem(f"带限初始相位")
         self.initPhaseSel.setEnabled(False)
 
         maxIterNumText = QLabel("最大迭代")
@@ -126,6 +129,7 @@ class MainWindow(QMainWindow):
 
         self.iterTargetSel = QComboBox()
         self.iterTargetSel.addItem(f"均方根误差 <=")
+        self.iterTargetSel.addItem(f"SSIM >=")
         self.iterTargetSel.addItem(f"光能利用率 >=")
         self.iterTargetSel.addItem(f"光场均匀度 >=")
         self.iterTargetSel.setEnabled(False)
@@ -615,7 +619,7 @@ class MainWindow(QMainWindow):
             tStart = time.time()
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
-                    iteration = GSW(
+                    algorithm = GSW(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -624,7 +628,7 @@ class MainWindow(QMainWindow):
                         RMSEList=self._RMSEList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
-                    iteration = WCIA(
+                    algorithm = WCIA(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -633,7 +637,7 @@ class MainWindow(QMainWindow):
                         RMSEList=self._RMSEList
                     )
 
-                u, phase = iteration.iteration()
+                u, phase = algorithm.iterate()
             except Exception as err:
                 logHandler.error(f"Err in iteration: {err}")
                 QMessageBox.critical(self, '错误', f'迭代过程中发生异常：\n{err}')
