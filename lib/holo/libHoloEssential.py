@@ -63,6 +63,8 @@ class Holo:
         """
         迭代指标评价
 
+        todo: SSIM PSNR
+
         :return: 是否终止迭代
         """
         # 检查相位恢复结果的均匀度
