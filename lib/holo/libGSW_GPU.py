@@ -23,9 +23,9 @@ class GSW(Holo):
         # 初始化光场 权重数组
         self.Atarget = self.targetImg
         self.phase = self.phaseInitialization()
-        self.Aw = cp.ones_like(self.targetImg)
+        self.Aw = cp.empty_like(self.targetImg)
 
-        self.Ak = self.Atarget * self.Aw * cp.exp(1j * self.phase)
+        self.Ak = self.Atarget * cp.exp(1j * self.phase)
         self.ak = cp.empty_like(self.targetImg, dtype="complex")
         self.aK = cp.empty_like(self.targetImg, dtype="complex")
         self.AK = cp.empty_like(self.targetImg, dtype="complex")
