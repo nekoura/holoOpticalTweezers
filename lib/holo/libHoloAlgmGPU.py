@@ -35,7 +35,7 @@ class WCIA(Holo):
         self.Aholo = cp.sqrt(Eholo / H)
         self.Acon = cp.empty_like(self.Atarget, dtype="complex")
 
-    def iteration(self) -> tuple:
+    def iterate(self) -> tuple:
         """
         WCIA迭代算法
         """
@@ -61,7 +61,7 @@ class WCIA(Holo):
             # I=|u|^2
             # intensity = cp.abs(AK) ** 2
             # 归一化光强
-            self.normalizedA = self.normalize(cp.abs(self.AK))
+            self.normalizedAmp = self.normalize(cp.abs(self.AK))
 
             if self.iterAnalyze():
                 break
@@ -101,7 +101,7 @@ class GSW(Holo):
         self.Aholo = 1
         self.Aw = cp.empty_like(self.Atarget, dtype="complex")
 
-    def iteration(self) -> tuple:
+    def iterate(self) -> tuple:
         """
         GSW迭代算法
         """
@@ -125,7 +125,7 @@ class GSW(Holo):
             # I=|u|^2
             # intensity = cp.abs(AK) ** 2
             # 归一化光强
-            self.normalizedA = self.normalize(cp.abs(self.AK))
+            self.normalizedAmp = self.normalize(cp.abs(self.AK))
 
             if self.iterAnalyze():
                 break

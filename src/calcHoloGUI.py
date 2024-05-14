@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self._uniList = []
         self._effiList = []
         self._RMSEList = []
+        self._SSIMList = []
 
         self._pressed = False
         self._lastX = 0
@@ -106,8 +107,9 @@ class MainWindow(QMainWindow):
         self.holoAlgmSel = QComboBox()
         self.holoAlgmSel.addItem(f"加权GS")
         self.holoAlgmSel.addItem(f"WCIA")
-        self.holoAlgmSel.addItem(f"MRAF")
-        self.holoAlgmSel.addItem(f"PhaseOnly")
+        self.holoAlgmSel.addItem(f"(WIP) MRAF")
+        self.holoAlgmSel.addItem(f"(WIP) PhaseOnly")
+        self.holoAlgmSel.addItem(f"(WIP) RCWA")
         self.holoAlgmSel.setEnabled(False)
 
         initPhaseText = QLabel("初始相位")
@@ -115,7 +117,7 @@ class MainWindow(QMainWindow):
         self.initPhaseSel = QComboBox()
         self.initPhaseSel.addItem(f"随机")
         self.initPhaseSel.addItem(f"目标光场IFFT")
-        self.initPhaseSel.addItem(f"带限初始相位")
+        self.initPhaseSel.addItem(f"(WIP) 带限初始相位")
         self.initPhaseSel.setEnabled(False)
 
         maxIterNumText = QLabel("最大迭代")
@@ -129,7 +131,7 @@ class MainWindow(QMainWindow):
 
         self.iterTargetSel = QComboBox()
         self.iterTargetSel.addItem(f"均方根误差 <=")
-        self.iterTargetSel.addItem(f"SSIM >=")
+        self.iterTargetSel.addItem(f"(WIP) SSIM >=")
         self.iterTargetSel.addItem(f"光能利用率 >=")
         self.iterTargetSel.addItem(f"光场均匀度 >=")
         self.iterTargetSel.setEnabled(False)
@@ -625,7 +627,8 @@ class MainWindow(QMainWindow):
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
                         uniList=self._uniList,
                         effiList=self._effiList,
-                        RMSEList=self._RMSEList
+                        RMSEList=self._RMSEList,
+                        SSIMList=self._SSIMList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
                     algorithm = WCIA(
@@ -634,7 +637,8 @@ class MainWindow(QMainWindow):
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
                         uniList=self._uniList,
                         effiList=self._effiList,
-                        RMSEList=self._RMSEList
+                        RMSEList=self._RMSEList,
+                        SSIMList=self._SSIMList
                     )
 
                 u, phase = algorithm.iterate()
@@ -653,6 +657,8 @@ class MainWindow(QMainWindow):
                 )
 
                 tEnd = time.time()
+
+                del algorithm
 
                 # 在预览窗口显示计算好的全息图
                 ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
@@ -925,9 +931,10 @@ class MainWindow(QMainWindow):
                     yUni = self._uniList[x_index - 1]
                     yEffi = self._effiList[x_index - 1]
                     yRMSE = self._RMSEList[x_index - 1]
+                    ySSIM = self._SSIMList[x_index - 1]
 
                     # 格式化坐标数据
-                    xyText = f"X={xVal:}\nUni={yUni:.4f}\nEffi={yEffi:.4f}\nRMSE={yRMSE:.4f}"
+                    xyText = f"X={xVal:}\nUni={yUni:.4f}\nEffi={yEffi:.4f}\nRMSE={yRMSE:.4f}\nSSIM={ySSIM:.4f}"
 
                     # 更新文本对象的内容
                     iterText.set_text(xyText)
@@ -951,6 +958,9 @@ class MainWindow(QMainWindow):
                     crossPtR.set_data([xVal, xVal], [yRMSE, yRMSE])
                     crossPtR.set_visible(True)
 
+                    crossPtS.set_data([xVal, xVal], [ySSIM, ySSIM])
+                    crossPtS.set_visible(True)
+
                     self.iterationHistory.canvas.draw()  # 重绘画布
 
                     # 更新状态栏的显示
@@ -962,6 +972,7 @@ class MainWindow(QMainWindow):
                     crossPtU.set_visible(False)
                     crossPtE.set_visible(False)
                     crossPtR.set_visible(False)
+                    crossPtS.set_visible(False)
                     self.iterationHistory.canvas.draw()
             else:
                 # 如果x不在数据范围内，则隐藏文本对象
@@ -970,6 +981,7 @@ class MainWindow(QMainWindow):
                 crossPtU.set_visible(False)
                 crossPtE.set_visible(False)
                 crossPtR.set_visible(False)
+                crossPtS.set_visible(False)
                 self.iterationHistory.canvas.draw()
 
         self.iterationHistory.clf()
@@ -982,6 +994,7 @@ class MainWindow(QMainWindow):
         iterationPlot.plot(xData, self._uniList, label='Uniformity')
         iterationPlot.plot(xData, self._effiList, label='efficiency')
         iterationPlot.plot(xData, self._RMSEList, label='RMSE')
+        iterationPlot.plot(xData, self._SSIMList, label='SSIM')
 
         iterationPlot.legend(loc='best', fontsize=8)
 
@@ -1010,6 +1023,9 @@ class MainWindow(QMainWindow):
 
         crossPtR = iterationPlot.plot([], [], 'o', color='C2', markersize=5)[0]
         crossPtR.set_visible(False)
+
+        crossPtS = iterationPlot.plot([], [], 'o', color='C3', markersize=5)[0]
+        crossPtS.set_visible(False)
 
         self.iterationHistory.tight_layout()
         self.iterationHistory.subplots_adjust(left=0.1, bottom=0.12)
