@@ -1,7 +1,5 @@
 import cupy as cp
-import torch
-import torch.nn.functional as F
-import math
+from skimage.metrics import structural_similarity
 
 
 class Holo:
@@ -25,7 +23,7 @@ class Holo:
         self.uniList = kwargs.get('uniList', [])
         self.effiList = kwargs.get('effiList', [])
         self.RMSEList = kwargs.get('RMSEList', [])
-        self.SSIMList = kwargs.get('RMSEList', [])
+        self.SSIMList = kwargs.get('SSIMList', [])
 
         self.signalRegion = self.targetImg > 0
         self.nonSigRegion = self.targetImg == 0
@@ -63,84 +61,14 @@ class Holo:
         )
         self.RMSEList.append(float(RMSE))
 
-    def SSIMCalc(self, window_size=11, window=None, size_average=True, full=False):
-        def gaussian(window_size, sigma):
-            """
-            Generates a list of Tensor values drawn from a gaussian distribution with standard
-            diviation = sigma and sum of all elements = 1.
+    def SSIMCalc(self):
+        SSIM = structural_similarity(
+            cp.asnumpy(self.targetImg),
+            cp.asnumpy(self.normalizedAmp),
+            data_range=cp.asnumpy(self.targetImg).max() - cp.asnumpy(self.targetImg).min()
+        )
 
-            Length of list = window_size
-            """
-            gauss = torch.Tensor(
-                [math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)]
-                )
-            return gauss / gauss.sum()
-
-        def create_window(window_size, channel=1):
-
-            # Generate an 1D tensor containing values sampled from a gaussian distribution
-            _1d_window = gaussian(window_size=window_size, sigma=1.5).unsqueeze(1)
-
-            # Converting to 2D
-            _2d_window = _1d_window.mm(_1d_window.t()).float().unsqueeze(0).unsqueeze(0)
-
-            window = torch.Tensor(_2d_window.expand(channel, 1, window_size, window_size).contiguous())
-
-            return window
-
-        pad = window_size // 2
-
-        [height, width, channels] = self.normalizedAmp.shape
-
-        # if window is not provided, init one
-        if window is None:
-            real_size = min(window_size, height, width)  # window should be atleast 11x11
-            window = create_window(real_size, channel=channels).to(self.normalizedAmp.device)
-
-        # calculating the mu parameter (locally) for both images using a gaussian filter
-        # calculates the luminosity params
-        mu1 = F.conv2d(self.normalizedAmp, window, padding=pad, groups=channels)
-        mu2 = F.conv2d(self.targetImg, window, padding=pad, groups=channels)
-
-        mu1_sq = mu1 ** 2
-        mu2_sq = mu2 ** 2
-        mu12 = mu1 * mu2
-
-        # now we calculate the sigma square parameter
-        # Sigma deals with the contrast component
-        sigma1_sq = F.conv2d(
-            self.normalizedAmp * self.normalizedAmp, window, padding=pad, groups=channels
-        ) - mu1_sq
-        sigma2_sq = F.conv2d(
-            self.targetImg * self.targetImg, window, padding=pad, groups=channels
-        ) - mu2_sq
-        sigma12 = F.conv2d(
-            self.normalizedAmp * self.targetImg, window, padding=pad, groups=channels
-        ) - mu12
-
-        # Some constants for stability
-        C1 = 0.01 ** 2  # NOTE: Removed L from here (ref PT implementation)
-        C2 = 0.03 ** 2
-
-        contrast_metric = (2.0 * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2)
-        contrast_metric = torch.mean(contrast_metric)
-
-        numerator1 = 2 * mu12 + C1
-        numerator2 = 2 * sigma12 + C2
-        denominator1 = mu1_sq + mu2_sq + C1
-        denominator2 = sigma1_sq + sigma2_sq + C2
-
-        ssim_score = (numerator1 * numerator2) / (denominator1 * denominator2)
-
-        if size_average:
-            ret = ssim_score.mean()
-        else:
-            ret = ssim_score.mean(1).mean(1).mean(1)
-
-        if full:
-            return ret, contrast_metric
-
-        self.SSIMList.append(float(ret))
+        self.SSIMList.append(SSIM)
 
     def iterAnalyze(self) -> bool:
         """
@@ -165,7 +93,7 @@ class Holo:
                 return True
         elif self.iterTarget[0] == 1:
             # SSIM大于等于设置阈值
-            if self.SSIMList[-1] <= self.iterTarget[1]:
+            if self.SSIMList[-1] >= self.iterTarget[1]:
                 return True
         elif self.iterTarget[0] == 2:
             # 光能利用率大于等于设置阈值

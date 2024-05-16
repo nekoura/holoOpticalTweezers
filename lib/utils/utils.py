@@ -63,6 +63,11 @@ class Utils:
             required=False, help='Bypass Laser detection (if laser control is unnecessary)'
         )
 
+        parser.add_argument(
+            '-ac', '--auto-open-camera', default=False, action='store_true',
+            required=False, help='Automatically open camera on startup'
+        )
+
         args = parser.parse_args()
         return args
 
@@ -101,7 +106,7 @@ class Utils:
         consoleHandler.setFormatter(
             colorlog.ColoredFormatter(
                 fmt=f"%(log_color)s[%(levelname)s] [%(asctime)s] "
-                    f"%(module)s->%(funcName)s (line %(lineno)d): %(message)s",
+                    f"%(funcName)s (line %(lineno)d): %(message)s",
                 datefmt='%Y-%m-%d %H:%M:%S',
                 log_colors={
                     'DEBUG': 'cyan',
@@ -124,7 +129,7 @@ class Utils:
             logFileHandler.setFormatter(
                 logging.Formatter(
                     fmt=f"[%(levelname)s] [%(asctime)s.%(msecs)03d] "
-                        f"%(module)s->%(funcName)s (line %(lineno)d): %(message)s",
+                        f"%(funcName)s (line %(lineno)d): %(message)s",
                     datefmt='%Y-%m-%d %H:%M:%S'
                 )
             )

@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
+from PyQt6.QtWidgets import QApplication, QStyleFactory, QMainWindow, QWidget, QStatusBar, \
     QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
     QDialog, QFileDialog, QMessageBox, \
     QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
@@ -66,6 +66,10 @@ class MainWindow(QMainWindow):
         self.holoImgReady.connect(self.secondWin.displayHoloImg)
 
         self._initUI()
+
+        if any(arg == '-ac' or arg == '--auto-open-camera' for arg in sys.argv[1:]):
+            self.toggleCam()
+            logHandler.info("Camera started automatically.")
 
     def _initUI(self):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SLM Holograph Generator")
@@ -131,7 +135,7 @@ class MainWindow(QMainWindow):
 
         self.iterTargetSel = QComboBox()
         self.iterTargetSel.addItem(f"均方根误差 <=")
-        self.iterTargetSel.addItem(f"(WIP) SSIM >=")
+        self.iterTargetSel.addItem(f"(实验性) SSIM >=")
         self.iterTargetSel.addItem(f"光能利用率 >=")
         self.iterTargetSel.addItem(f"光场均匀度 >=")
         self.iterTargetSel.setEnabled(False)
@@ -283,7 +287,7 @@ class MainWindow(QMainWindow):
         self.reconstructPhase2D = Figure()
         reconstructPhase2DCanvas = FigureCanvas(self.reconstructPhase2D)
 
-        # GS迭代历史显示区域
+        # 迭代历史显示区域
         self.iterationHistory = Figure()
         iterationHistoryCanvas = FigureCanvas(self.iterationHistory)
 
@@ -588,7 +592,7 @@ class MainWindow(QMainWindow):
             else:
                 if imgDir is not None and imgDir != '':
                     cv2.imencode(imgType, self.holoImg)[1].tofile(imgDir)
-                    np.save(f"{Path(imgDir).stem}.npy", self.holoU)
+                    np.save(f"{Path(imgDir).parent}/{Path(imgDir).stem}.npy", self.holoU)
                     self.statusBar.showMessage(f"保存成功。图片位于{imgDir}，并在目录中存储了同名.npy文件。"
                                                f"该文件包含光场信息，请与图像一同妥善保存，切勿更名。")
                     logHandler.info(f"Holo image saved at {imgDir}")
@@ -608,6 +612,7 @@ class MainWindow(QMainWindow):
             self._uniList.clear()
             self._effiList.clear()
             self._RMSEList.clear()
+            self._SSIMList.clear()
 
             maxIterNum = self.maxIterNumInput.value()
             iterTarget = self.iterTargetInput.value() * 0.01
@@ -674,17 +679,19 @@ class MainWindow(QMainWindow):
                 uniformity = self._uniList[-1]
                 efficiency = self._effiList[-1]
                 RMSE = self._RMSEList[-1]
+                SSIM = self._SSIMList[-1]
 
                 self.iterationDraw()
 
                 logHandler.info(f"Finish Calculation.")
                 logHandler.info(
                     f"Iteration={iteration}, Duration={duration}s, "
-                    f"uniformity={uniformity}, efficiency={efficiency}, RMSE={RMSE}"
+                    f"uniformity={uniformity}, efficiency={efficiency}, RMSE={RMSE}, SSIM={SSIM}"
                 )
                 self.statusBar.showMessage(
                     f"计算完成。迭代{iteration}次，时长 {duration}s，"
-                    f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}, RMSE={round(RMSE, 4)}"
+                    f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}, "
+                    f"RMSE={round(RMSE, 4)}, SSIM={round(SSIM, 4)}"
                 )
 
                 self.holoImgPreviewTabWidget.setCurrentIndex(2)
@@ -1232,6 +1239,7 @@ if __name__ == '__main__':
         writeLogFile=(args.floglvl > 0)
     )
 
+    # QApplication.setStyle(QStyleFactory.create('Fusion'))
     app = QApplication(sys.argv)
     qInstallMessageHandler(Utils.exceptionHandler)
     window = MainWindow()
