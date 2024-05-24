@@ -1,5 +1,7 @@
 import cupy as cp
-from skimage.metrics import structural_similarity
+import numpy as np
+import torch
+from pytorch_msssim import ms_ssim
 
 
 class Holo:
@@ -62,13 +64,15 @@ class Holo:
         self.RMSEList.append(float(RMSE))
 
     def SSIMCalc(self):
-        SSIM = structural_similarity(
-            cp.asnumpy(self.targetImg),
-            cp.asnumpy(self.normalizedAmp),
-            data_range=cp.asnumpy(self.targetImg).max() - cp.asnumpy(self.targetImg).min()
+        current = torch.from_numpy(
+            np.expand_dims(np.expand_dims(cp.asnumpy(self.normalizedAmp), axis=0), axis=0)
         )
+        target = torch.from_numpy(
+            np.expand_dims(np.expand_dims(cp.asnumpy(self.targetImg), axis=0), axis=0)
+        )
+        SSIM = ms_ssim(current, target, data_range=1,)
 
-        self.SSIMList.append(SSIM)
+        self.SSIMList.append(float(SSIM))
 
     def iterAnalyze(self) -> bool:
         """

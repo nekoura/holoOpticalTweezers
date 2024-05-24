@@ -109,8 +109,8 @@ class MainWindow(QMainWindow):
         holoAlgmText = QLabel("全息算法")
 
         self.holoAlgmSel = QComboBox()
-        self.holoAlgmSel.addItem(f"加权GS")
         self.holoAlgmSel.addItem(f"WCIA")
+        self.holoAlgmSel.addItem(f"(Deprecated) 加权GS")
         self.holoAlgmSel.addItem(f"(WIP) MRAF")
         self.holoAlgmSel.addItem(f"(WIP) PhaseOnly")
         self.holoAlgmSel.addItem(f"(WIP) RCWA")
@@ -626,7 +626,7 @@ class MainWindow(QMainWindow):
             tStart = time.time()
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
-                    algorithm = GSW(
+                    algorithm = WCIA(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -636,7 +636,7 @@ class MainWindow(QMainWindow):
                         SSIMList=self._SSIMList
                     )
                 elif self.holoAlgmSel.currentIndex() == 1:
-                    algorithm = WCIA(
+                    algorithm = GSW(
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
@@ -1239,7 +1239,7 @@ if __name__ == '__main__':
         writeLogFile=(args.floglvl > 0)
     )
 
-    # QApplication.setStyle(QStyleFactory.create('Fusion'))
+    QApplication.setStyle(QStyleFactory.create('Fusion'))
     app = QApplication(sys.argv)
     qInstallMessageHandler(Utils.exceptionHandler)
     window = MainWindow()
