@@ -22,6 +22,7 @@ class Holo:
         self.initPhase = kwargs.get('initPhase', (0, None))
         self.iterTarget = kwargs.get('iterTarget', (0, 0.95))
         self.normalizedAmp = None
+        self.enableSSIM = kwargs.get('enableSSIM', True)
         self.uniList = kwargs.get('uniList', [])
         self.effiList = kwargs.get('effiList', [])
         self.RMSEList = kwargs.get('RMSEList', [])
@@ -78,7 +79,7 @@ class Holo:
         """
         迭代指标评价
 
-        todo: SSIM PSNR
+        todo: PSNR
 
         :return: 是否终止迭代
         """
@@ -89,7 +90,8 @@ class Holo:
         # 检查相位恢复结果的RMSE
         self.RMSECalc()
         # 检查相位恢复结果的SSIM
-        self.SSIMCalc()
+        if self.enableSSIM:
+            self.SSIMCalc()
 
         if self.iterTarget[0] == 0:
             # RMSE小于等于设置阈值
@@ -150,6 +152,16 @@ class Holo:
         holoImg = Holo.normalize(phase) * 255
 
         return holoImg.astype("uint8")
+
+    @staticmethod
+    def encodeAmp2Phase(u: cp.ndarray):
+        Un = Holo.normalize(u) * 255
+        M = cp.abs(Un)
+        n = 1.2
+        X = n - M
+        Tn = cp.exp(1j * cp.pi * X) * cp.sinc(X)
+        T = Tn * cp.exp(1j * n * cp.angle(Un))
+        return T, cp.angle(T)
 
     @staticmethod
     def reconstruct(holoU: cp.ndarray, d: float, wavelength: float):

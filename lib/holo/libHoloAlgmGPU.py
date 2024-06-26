@@ -1,9 +1,8 @@
-# Ref https://doi.org/10.3390/app10103652
-
 import cupy as cp
 from lib.holo.libHoloEssential import Holo
 
 
+# Ref https://doi.org/10.3390/app10103652
 class WCIA(Holo):
     def __init__(self, targetImg: cp.ndarray, maxIterNum: int, **kwargs):
         """
@@ -86,7 +85,7 @@ class GSW(Holo):
         迭代k 相位提取和振幅正则化后复振幅  a_k' = self.aK
         迭代k 图像平面（重建）复振幅分布  A_k' = self.AK
         全息平面强制振幅约束  A_holo = self.Aholo
-        图像平面强制振幅约束  A_con = self.Acon
+        图像平面权重约束  A_w = self.Aw
         """
         super().__init__(targetImg, maxIterNum, **kwargs)
 
@@ -134,5 +133,4 @@ class GSW(Holo):
         cp._default_memory_pool.free_all_blocks()
 
         return self.aK, self.phase
-
 

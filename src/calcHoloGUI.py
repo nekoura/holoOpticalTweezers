@@ -6,12 +6,12 @@ import cv2
 import cupy as cp
 import numpy as np
 from pathlib import Path
-from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, qInstallMessageHandler
+from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, QSize, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
 from PyQt6.QtWidgets import QApplication, QStyleFactory, QMainWindow, QWidget, QStatusBar, \
     QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
     QDialog, QFileDialog, QMessageBox, \
-    QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox
+    QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QProgressBar
 from matplotlib import pyplot, ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -80,14 +80,24 @@ class MainWindow(QMainWindow):
         # ==== 控制区域 ====
 
         # 输入功能区
-        self.snapFromCamBtn = QPushButton('从相机捕获')
+        self.snapFromCamBtn = QPushButton(' 从相机捕获')
+        snapFromCamBtnIcon = QIcon(QPixmap('../res/svg/camera-fill.svg'))
+        self.snapFromCamBtn.setIcon(snapFromCamBtnIcon)
+        self.snapFromCamBtn.setIconSize(QSize(14, 14))
         self.snapFromCamBtn.clicked.connect(self.snapFromCam)
         self.snapFromCamBtn.setEnabled(False)
 
-        openTargetFileBtn = QPushButton('载入目标图...')
+        openTargetFileBtn = QPushButton(' 新的目标图...')
+        openTargetFileBtnIcon = QIcon(QPixmap('../res/svg/file-earmark-image.svg'))
+        openTargetFileBtn.setIcon(openTargetFileBtnIcon)
+        openTargetFileBtn.setIconSize(QSize(14, 14))
         openTargetFileBtn.clicked.connect(self.openTargetImg)
 
-        openHoloFileBtn = QPushButton('载入已有全息图...')
+        openHoloFileBtn = QPushButton(' 已有全息图...')
+        openHoloFileBtnIcon = QIcon(QPixmap('../res/svg/qr-code.svg'))
+        openHoloFileBtn.setIcon(openHoloFileBtnIcon)
+        openHoloFileBtn.setIconSize(QSize(14, 14))
+        openHoloFileBtn.setStyleSheet("color: #ffffff; background-color: #2878B7;")
         openHoloFileBtn.clicked.connect(self.openHoloImg)
 
         inputTipsText = QLabel("欲载入已有全息图，相同目录下需存在保存全息图时生成的同名.npy文件")
@@ -145,38 +155,69 @@ class MainWindow(QMainWindow):
         self.iterTargetInput.setValue(1)
         self.iterTargetInput.setEnabled(False)
 
-        self.calcHoloBtn = QPushButton('计算全息图')
+        self.enableSSIMChk = QCheckBox()
+        self.enableSSIMChk.setEnabled(False)
+        self.enableSSIMChk.setChecked(True)
+        enableSSIMText = QLabel("计算SSIM")
+
+        self.enableAmpEncChk = QCheckBox()
+        self.enableAmpEncChk.setEnabled(False)
+        self.enableAmpEncChk.setChecked(False)
+        enableAmpEncText = QLabel("编码振幅信息")
+
+        self.calcHoloBtn = QPushButton(' 计算全息图')
+        calcHoloBtnIcon = QIcon(QPixmap('../res/svg/calculator.svg'))
+        self.calcHoloBtn.setIcon(calcHoloBtnIcon)
+        self.calcHoloBtn.setIconSize(QSize(14, 14))
         self.calcHoloBtn.clicked.connect(self.calcHoloImg)
         self.calcHoloBtn.setEnabled(False)
 
-        self.saveHoloBtn = QPushButton('保存全息图...')
+        self.saveHoloBtn = QPushButton(' 保存全息图...')
+        saveHoloBtnIcon = QIcon(QPixmap('../res/svg/download.svg'))
+        self.saveHoloBtn.setIcon(saveHoloBtnIcon)
+        self.saveHoloBtn.setIconSize(QSize(14, 14))
         self.saveHoloBtn.clicked.connect(self.saveHoloImg)
         self.saveHoloBtn.setEnabled(False)
 
         calHoloLayout = QGridLayout()
-        calHoloLayout.addWidget(holoAlgmText, 0, 0, 1, 1)
-        calHoloLayout.addWidget(self.holoAlgmSel, 0, 1, 1, 2)
-        calHoloLayout.addWidget(initPhaseText, 1, 0, 1, 1)
-        calHoloLayout.addWidget(self.initPhaseSel, 1, 1, 1, 2)
-        calHoloLayout.addWidget(maxIterNumText, 2, 0, 1, 1)
-        calHoloLayout.addWidget(self.maxIterNumInput, 2, 1, 1, 2)
-        calHoloLayout.addWidget(iterTargetText, 3, 0, 1, 3)
-        calHoloLayout.addWidget(self.iterTargetSel, 4, 0, 1, 2)
-        calHoloLayout.addWidget(self.iterTargetInput, 4, 2, 1, 1)
-        calHoloLayout.addWidget(self.calcHoloBtn, 5, 0, 1, 3)
-        calHoloLayout.addWidget(self.saveHoloBtn, 6, 0, 1, 3)
+        calHoloLayout.addWidget(holoAlgmText, 0, 0, 1, 2)
+        calHoloLayout.addWidget(self.holoAlgmSel, 0, 2, 1, 4)
+        calHoloLayout.addWidget(initPhaseText, 1, 0, 1, 2)
+        calHoloLayout.addWidget(self.initPhaseSel, 1, 2, 1, 4)
+        calHoloLayout.addWidget(maxIterNumText, 2, 0, 1, 2)
+        calHoloLayout.addWidget(self.maxIterNumInput, 2, 2, 1, 4)
+        calHoloLayout.addWidget(iterTargetText, 3, 0, 1, 6)
+        calHoloLayout.addWidget(self.iterTargetSel, 4, 0, 1, 4)
+        calHoloLayout.addWidget(self.iterTargetInput, 4, 4, 1, 2)
+        calHoloLayout.addWidget(enableSSIMText, 5, 0, 1, 2)
+        calHoloLayout.addWidget(self.enableSSIMChk, 5, 2, 1, 1)
+        calHoloLayout.addWidget(enableAmpEncText, 5, 3, 1, 2)
+        calHoloLayout.addWidget(self.enableAmpEncChk, 5, 5, 1, 1)
+        calHoloLayout.addWidget(self.calcHoloBtn, 6, 0, 1, 6)
+        calHoloLayout.addWidget(self.saveHoloBtn, 7, 0, 1, 6)
         calHoloLayout.setColumnStretch(0, 1)
         calHoloLayout.setColumnStretch(1, 1)
         calHoloLayout.setColumnStretch(2, 1)
+        calHoloLayout.setColumnStretch(3, 1)
+        calHoloLayout.setColumnStretch(4, 1)
+        calHoloLayout.setColumnStretch(5, 1)
 
         calHoloGroupBox = QGroupBox("全息图计算")
         calHoloGroupBox.setLayout(calHoloLayout)
 
         # 相机功能区
-        self.toggleCamBtn = QPushButton('打开相机')
+        self.toggleCamBtn = QPushButton(' 打开相机')
+        self.openCamIcon = QIcon(QPixmap('../res/svg/camera-video-fill.svg'))
+        self.closeCamIcon = QIcon(QPixmap('../res/svg/camera-video-off-fill.svg'))
+        self.toggleCamBtn.setIcon(self.openCamIcon)
+        self.toggleCamBtn.setIconSize(QSize(14, 14))
+        self.toggleCamBtn.setStyleSheet("color: #ffffff; background-color: #228B22;")
         self.toggleCamBtn.clicked.connect(self.toggleCam)
 
-        self.snapBtn = QPushButton('抓图')
+        self.snapBtn = QPushButton(' 抓图')
+        snapBtnIcon = QIcon(QPixmap('../res/svg/camera2.svg'))
+        self.snapBtn.setIcon(snapBtnIcon)
+        self.snapBtn.setIconSize(QSize(14, 14))
         self.snapBtn.clicked.connect(self.snapImg)
         self.snapBtn.setEnabled(False)
 
@@ -223,7 +264,7 @@ class MainWindow(QMainWindow):
         ctrlArea = QWidget()
         ctrlArea.setObjectName("ctrlArea")
         ctrlArea.setLayout(ctrlAreaLayout)
-        ctrlArea.setFixedWidth(240)
+        ctrlArea.setFixedWidth(280)
 
         # ==== 显示区域 ====
         # 相机预览区域
@@ -296,18 +337,48 @@ class MainWindow(QMainWindow):
         self.reconstructViewTabWidget.addTab(reconstructPhase2DCanvas, "重建相位")
         self.reconstructViewTabWidget.setTabEnabled(1, False)
 
-        imgViewAreaLayout = QGridLayout()
-        imgViewAreaLayout.addWidget(camPreviewGroupBox, 0, 1, 2, 1)
-        imgViewAreaLayout.addWidget(self.holoImgPreviewTabWidget, 0, 0, 1, 1)
-        imgViewAreaLayout.addWidget(self.reconstructViewTabWidget, 1, 0, 1, 1)
-        imgViewAreaLayout.setColumnStretch(0, 2)
-        imgViewAreaLayout.setColumnStretch(1, 5)
-        imgViewAreaLayout.setRowStretch(0, 1)
-        imgViewAreaLayout.setRowStretch(1, 1)
+        calcInfoLayout = QVBoxLayout()
+        calcInfoLayout.addWidget(self.holoImgPreviewTabWidget)
+        calcInfoLayout.addWidget(self.reconstructViewTabWidget)
+        calcInfoLayout.setStretch(0, 1)
+        calcInfoLayout.setStretch(1, 1)
+
+        self.calcInfoWidget = QWidget()
+        self.calcInfoWidget.setLayout(calcInfoLayout)
+
+        imgViewAreaLayout = QHBoxLayout()
+        imgViewAreaLayout.addWidget(self.calcInfoWidget)
+        imgViewAreaLayout.addWidget(camPreviewGroupBox)
+        imgViewAreaLayout.setStretch(0, 2)
+        imgViewAreaLayout.setStretch(1, 5)
 
         imgViewArea = QWidget()
         imgViewArea.setObjectName("imgViewArea")
         imgViewArea.setLayout(imgViewAreaLayout)
+
+        # ==== 状态栏 ====
+
+        self.toggleCalcLayoutBtn = QPushButton()
+        self.openLayoutIcon = QIcon(QPixmap('../res/svg/fullscreen-exit.svg'))
+        self.closeLayoutIcon = QIcon(QPixmap('../res/svg/fullscreen.svg'))
+        self.toggleCalcLayoutBtn.setText(" 收起全息图面板")
+        self.toggleCalcLayoutBtn.setIcon(self.closeLayoutIcon)
+        self.toggleCalcLayoutBtn.setIconSize(QSize(14, 14))
+        self.toggleCalcLayoutBtn.clicked.connect(self.toggleCalcLayout)
+
+        self.progressBar = QProgressBar()
+        self.progressBar.setStyleSheet("QProgressBar {min-width: 100px; max-width: 200px;}")
+
+        self.secondStatusInfo = QLabel()
+        self.secondStatusInfo.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.secondStatusInfo.setStyleSheet("QLabel {min-width: 100px}")
+
+        self.statusBar = QStatusBar()
+        self.statusBar.addPermanentWidget(self.secondStatusInfo)
+        self.statusBar.addPermanentWidget(self.progressBar)
+        self.statusBar.addPermanentWidget(self.toggleCalcLayoutBtn)
+
+        self.statusBar.showMessage(f"就绪")
 
         # ==== 窗体 ====
         layout = QHBoxLayout()
@@ -317,21 +388,26 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         widget.setLayout(layout)
         self.setCentralWidget(widget)
-
-        self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage(f"就绪")
 
     def _initLaserUI(self):
         # 激光器功能区
         self.laserPortSel = QComboBox()
         self.laserPortSel.setEnabled(False)
 
-        self.connectLaserBtn = QPushButton('连接控制盒')
+        self.connectLaserBtn = QPushButton(' 连接控制盒')
+        self.connectLaserIcon = QIcon(QPixmap('../res/svg/plug-fill.svg'))
+        self.disconnectLaserIcon = QIcon(QPixmap('../res/svg/eject-fill.svg'))
+        self.connectLaserBtn.setIcon(self.connectLaserIcon)
+        self.connectLaserBtn.setIconSize(QSize(14, 14))
         self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
         self.connectLaserBtn.setEnabled(False)
 
-        self.toggleLaserBtn = QPushButton('启动激光')
+        self.toggleLaserBtn = QPushButton(' 启动激光')
+        self.emitLaserIcon = QIcon(QPixmap('../res/svg/sun-fill.svg'))
+        self.stopLaserIcon = QIcon(QPixmap('../res/svg/x-octagon-fill.svg'))
+        self.toggleLaserBtn.setIcon(self.emitLaserIcon)
+        self.toggleLaserBtn.setIconSize(QSize(14, 14))
         self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
         self.toggleLaserBtn.setEnabled(False)
 
@@ -342,7 +418,10 @@ class MainWindow(QMainWindow):
         self.laserPwrInput.setValue(10)
         self.laserPwrInput.setEnabled(False)
 
-        self.setLaserPwrBtn = QPushButton('设定')
+        self.setLaserPwrBtn = QPushButton(' 设定')
+        confirmIcon = QIcon(QPixmap('../res/svg/check-lg.svg'))
+        self.setLaserPwrBtn.setIcon(confirmIcon)
+        self.setLaserPwrBtn.setIconSize(QSize(14, 14))
         self.setLaserPwrBtn.clicked.connect(self.setLaserPwr)
         self.setLaserPwrBtn.setEnabled(False)
 
@@ -361,6 +440,16 @@ class MainWindow(QMainWindow):
 
         self.laser = LaserMiddleWare()
         self.deviceUpdatedEvent()
+
+    def toggleCalcLayout(self):
+        visible = not self.calcInfoWidget.isVisible()
+        self.calcInfoWidget.setVisible(visible)
+        if visible:
+            self.toggleCalcLayoutBtn.setText(" 收起全息图面板")
+            self.toggleCalcLayoutBtn.setIcon(self.closeLayoutIcon)
+        else:
+            self.toggleCalcLayoutBtn.setText(" 展开全息图面板")
+            self.toggleCalcLayoutBtn.setIcon(self.openLayoutIcon)
 
     def closeEvent(self, event):
         """
@@ -386,7 +475,8 @@ class MainWindow(QMainWindow):
             self.laser.device = None
             logHandler.info(f"Laser disconnected.")
             self.statusBar.showMessage(f"激光器已断开")
-            self.connectLaserBtn.setText('连接控制盒')
+            self.connectLaserBtn.setText(' 连接控制盒')
+            self.connectLaserBtn.setIcon(self.connectLaserIcon)
         else:
             selLaserPortIndex = self.laserPortSel.currentIndex()
             if self.laser.portList is not None and selLaserPortIndex is not None:
@@ -405,10 +495,15 @@ class MainWindow(QMainWindow):
                 else:
                     logHandler.info(f"Laser connected. Device at {self.laser.port}.")
                     self.statusBar.showMessage(f"激光器控制盒已连接 ({self.laser.port})")
-                    self.connectLaserBtn.setText('断开控制盒')
+                    self.connectLaserBtn.setText(' 断开控制盒')
+                    self.connectLaserBtn.setIcon(self.disconnectLaserIcon)
 
         self.laserPortSel.setEnabled(not self.laserPortSel.isEnabled())
         self.toggleLaserBtn.setEnabled(not self.laserPortSel.isEnabled())
+        if self.toggleLaserBtn.isEnabled():
+            self.toggleLaserBtn.setStyleSheet("color: #000000; background-color: #f38d05;")
+        else:
+            self.toggleLaserBtn.setStyleSheet("")
         self.laserPwrInput.setEnabled(not self.laserPortSel.isEnabled())
         self.setLaserPwrBtn.setEnabled(not self.laserPortSel.isEnabled())
         logHandler.debug(f"UI thread updated. Initiator=User  Mode=toggle")
@@ -420,12 +515,16 @@ class MainWindow(QMainWindow):
         if self.laser.isEmitting:
             self.laser.setConfig('OFF')
             logHandler.info(f"Laser Config send. config: OFF")
-            self.toggleLaserBtn.setText('启动激光')
+            self.toggleLaserBtn.setText(' 启动激光')
+            self.toggleLaserBtn.setIcon(self.emitLaserIcon)
+            self.toggleLaserBtn.setStyleSheet("color: #000000; background-color: #f38d05;")
             self.statusBar.showMessage(f"激光器已停止")
         else:
             self.laser.setConfig('ON')
             logHandler.info(f"Laser Config send. config: ON")
-            self.toggleLaserBtn.setText('停止激光')
+            self.toggleLaserBtn.setText(' 停止激光')
+            self.toggleLaserBtn.setIcon(self.stopLaserIcon)
+            self.toggleLaserBtn.setStyleSheet("color: #ffffff; background-color: #ff0000;")
             self.statusBar.showMessage(f"激光器已出光，请注意操作安全。")
 
         self.connectLaserBtn.setEnabled(not self.connectLaserBtn.isEnabled())
@@ -453,7 +552,9 @@ class MainWindow(QMainWindow):
             self.camPreview.clear()
             self.camPreview.setText("点击 [打开相机] 以预览...")
 
-            self.toggleCamBtn.setText("打开相机")
+            self.toggleCamBtn.setText(" 打开相机")
+            self.toggleCamBtn.setIcon(self.openCamIcon)
+            self.toggleCamBtn.setStyleSheet("color: #ffffff; background-color: #228B22;")
         else:
             result = self.cam.openCamera()
             if result == -1:
@@ -472,7 +573,9 @@ class MainWindow(QMainWindow):
                 logHandler.info(f"Camara opened. Resolution: {self.cam.imgWidth}x{self.cam.imgHeight}")
                 self.statusBar.showMessage(f"相机分辨率 {self.cam.imgWidth}x{self.cam.imgHeight}")
 
-                self.toggleCamBtn.setText("关闭相机")
+                self.toggleCamBtn.setText(" 关闭相机")
+                self.toggleCamBtn.setIcon(self.closeCamIcon)
+                self.toggleCamBtn.setStyleSheet("color: #000000; background-color: #f38d05;")
                 self.autoExpChk.setChecked(self.cam.device.get_AutoExpoEnable() == 1)
                 expMin, expMax, expCur = self.cam.device.get_ExpTimeRange()
                 self.expTimeInput.setRange(10, 1000)
@@ -608,6 +711,10 @@ class MainWindow(QMainWindow):
 
             logHandler.info(f"Start Calculation.")
             self.statusBar.showMessage(f"开始计算...")
+            self.progressBar.reset()
+            self.progressBar.setRange(0, 10)
+            self.secondStatusInfo.setText(f"归一化与类型转换...")
+            self.progressBar.setValue(1)
 
             self._uniList.clear()
             self._effiList.clear()
@@ -623,6 +730,8 @@ class MainWindow(QMainWindow):
             target = cp.asarray(targetNormalized)
 
             # 计时
+            self.secondStatusInfo.setText(f"创建计算实例...")
+            self.progressBar.setValue(2)
             tStart = time.time()
             try:
                 if self.holoAlgmSel.currentIndex() == 0:
@@ -630,6 +739,7 @@ class MainWindow(QMainWindow):
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
+                        enableSSIM=self.enableSSIMChk.isChecked(),
                         uniList=self._uniList,
                         effiList=self._effiList,
                         RMSEList=self._RMSEList,
@@ -640,49 +750,67 @@ class MainWindow(QMainWindow):
                         target, maxIterNum,
                         initPhase=(self.initPhaseSel.currentIndex(), None),
                         iterTarget=(self.iterTargetSel.currentIndex(), iterTarget),
+                        enableSSIM=self.enableSSIMChk.isChecked(),
                         uniList=self._uniList,
                         effiList=self._effiList,
                         RMSEList=self._RMSEList,
                         SSIMList=self._SSIMList
                     )
 
+                self.secondStatusInfo.setText(f"开始迭代...")
+                self.progressBar.setRange(0, 0)
+
                 u, phase = algorithm.iterate()
+                if self.enableAmpEncChk.isChecked():
+                    u, phase = Holo.encodeAmp2Phase(u)
+
             except Exception as err:
                 logHandler.error(f"Err in iteration: {err}")
                 QMessageBox.critical(self, '错误', f'迭代过程中发生异常：\n{err}')
                 self.statusBar.showMessage(f"迭代过程中发生异常: {err}")
             else:
+                self.secondStatusInfo.setText(f"类型转换...")
+                self.progressBar.setRange(0, 10)
+                self.progressBar.setValue(5)
                 # CuPy类型转换 (CuPy->NumPy)
                 self.holoImg = cp.asnumpy(Holo.genHologram(phase))
                 self.holoU = cp.asnumpy(u)
 
-                self.holoImgRotated = cv2.rotate(
-                    cv2.flip(self.holoImg, 1),
-                    cv2.ROTATE_90_COUNTERCLOCKWISE
-                )
+                self.holoImgRotated = cv2.flip(self.holoImg, 1)
 
                 tEnd = time.time()
 
                 del algorithm
 
+                self.secondStatusInfo.setText(f"发送全息图...")
+                self.progressBar.setValue(7)
                 # 在预览窗口显示计算好的全息图
                 ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
                 # 向副屏发送计算好的全息图
                 self.holoImgReady.emit(self.holoImgRotated)
                 logHandler.info(f"Image has been transferred to the second monitor.")
 
+                self.secondStatusInfo.setText(f"计算重建效果...")
+                self.progressBar.setValue(8)
                 self.reconstructResult(self.holoU, 50, 532e-6)
 
+                self.secondStatusInfo.setText(f"进行性能统计...")
+                self.progressBar.setValue(9)
                 # 性能估计
                 iteration = len(self._uniList)
                 duration = round(tEnd - tStart, 2)
                 uniformity = self._uniList[-1]
                 efficiency = self._effiList[-1]
                 RMSE = self._RMSEList[-1]
-                SSIM = self._SSIMList[-1]
+                if self.enableSSIMChk.isChecked():
+                    SSIM = self._SSIMList[-1]
+                else:
+                    SSIM = -1
 
                 self.iterationDraw()
 
+                self.secondStatusInfo.setText(f"完成")
+                self.progressBar.setValue(10)
                 logHandler.info(f"Finish Calculation.")
                 logHandler.info(
                     f"Iteration={iteration}, Duration={duration}s, "
@@ -771,6 +899,8 @@ class MainWindow(QMainWindow):
                 self.maxIterNumInput.setEnabled(True)
                 self.iterTargetSel.setEnabled(True)
                 self.iterTargetInput.setEnabled(True)
+                self.enableSSIMChk.setEnabled(True)
+                self.enableAmpEncChk.setEnabled(True)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, False)
 
@@ -808,6 +938,8 @@ class MainWindow(QMainWindow):
                 self.maxIterNumInput.setEnabled(False)
                 self.iterTargetSel.setEnabled(False)
                 self.iterTargetInput.setEnabled(False)
+                self.enableSSIMChk.setEnabled(False)
+                self.enableAmpEncChk.setEnabled(True)
                 self.reconstructViewTabWidget.setCurrentIndex(0)
                 self.reconstructViewTabWidget.setTabEnabled(1, True)
 
@@ -938,10 +1070,14 @@ class MainWindow(QMainWindow):
                     yUni = self._uniList[x_index - 1]
                     yEffi = self._effiList[x_index - 1]
                     yRMSE = self._RMSEList[x_index - 1]
-                    ySSIM = self._SSIMList[x_index - 1]
+                    if self.enableSSIMChk.isChecked():
+                        ySSIM = self._SSIMList[x_index - 1]
+                        ssimTxt = f"\nSSIM={ySSIM:.4f}"
+                    else:
+                        ssimTxt = ""
 
                     # 格式化坐标数据
-                    xyText = f"X={xVal:}\nUni={yUni:.4f}\nEffi={yEffi:.4f}\nRMSE={yRMSE:.4f}\nSSIM={ySSIM:.4f}"
+                    xyText = f"X={xVal:}\nUni={yUni:.4f}\nEffi={yEffi:.4f}\nRMSE={yRMSE:.4f}{ssimTxt}"
 
                     # 更新文本对象的内容
                     iterText.set_text(xyText)
@@ -965,13 +1101,14 @@ class MainWindow(QMainWindow):
                     crossPtR.set_data([xVal, xVal], [yRMSE, yRMSE])
                     crossPtR.set_visible(True)
 
-                    crossPtS.set_data([xVal, xVal], [ySSIM, ySSIM])
-                    crossPtS.set_visible(True)
+                    if self.enableSSIMChk.isChecked():
+                        crossPtS.set_data([xVal, xVal], [ySSIM, ySSIM])
+                        crossPtS.set_visible(True)
 
                     self.iterationHistory.canvas.draw()  # 重绘画布
 
                     # 更新状态栏的显示
-                    self.statusBar.showMessage(xyText)
+                    self.secondStatusInfo.setText(xyText.replace('\n', ', '))
                 else:
                     # 如果x不在数据范围内，则隐藏文本对象
                     iterText.set_visible(False)
@@ -979,7 +1116,8 @@ class MainWindow(QMainWindow):
                     crossPtU.set_visible(False)
                     crossPtE.set_visible(False)
                     crossPtR.set_visible(False)
-                    crossPtS.set_visible(False)
+                    if self.enableSSIMChk.isChecked():
+                        crossPtS.set_visible(False)
                     self.iterationHistory.canvas.draw()
             else:
                 # 如果x不在数据范围内，则隐藏文本对象
@@ -988,7 +1126,8 @@ class MainWindow(QMainWindow):
                 crossPtU.set_visible(False)
                 crossPtE.set_visible(False)
                 crossPtR.set_visible(False)
-                crossPtS.set_visible(False)
+                if self.enableSSIMChk.isChecked():
+                    crossPtS.set_visible(False)
                 self.iterationHistory.canvas.draw()
 
         self.iterationHistory.clf()
@@ -1001,7 +1140,8 @@ class MainWindow(QMainWindow):
         iterationPlot.plot(xData, self._uniList, label='Uniformity')
         iterationPlot.plot(xData, self._effiList, label='efficiency')
         iterationPlot.plot(xData, self._RMSEList, label='RMSE')
-        iterationPlot.plot(xData, self._SSIMList, label='SSIM')
+        if self.enableSSIMChk.isChecked():
+            iterationPlot.plot(xData, self._SSIMList, label='SSIM')
 
         iterationPlot.legend(loc='best', fontsize=8)
 
@@ -1031,8 +1171,9 @@ class MainWindow(QMainWindow):
         crossPtR = iterationPlot.plot([], [], 'o', color='C2', markersize=5)[0]
         crossPtR.set_visible(False)
 
-        crossPtS = iterationPlot.plot([], [], 'o', color='C3', markersize=5)[0]
-        crossPtS.set_visible(False)
+        if self.enableSSIMChk.isChecked():
+            crossPtS = iterationPlot.plot([], [], 'o', color='C3', markersize=5)[0]
+            crossPtS.set_visible(False)
 
         self.iterationHistory.tight_layout()
         self.iterationHistory.subplots_adjust(left=0.1, bottom=0.12)
@@ -1239,7 +1380,7 @@ if __name__ == '__main__':
         writeLogFile=(args.floglvl > 0)
     )
 
-    QApplication.setStyle(QStyleFactory.create('Fusion'))
+    # QApplication.setStyle(QStyleFactory.create('Fusion'))
     app = QApplication(sys.argv)
     qInstallMessageHandler(Utils.exceptionHandler)
     window = MainWindow()
