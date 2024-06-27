@@ -154,13 +154,12 @@ class Holo:
         return holoImg.astype("uint8")
 
     @staticmethod
-    def encodeAmp2Phase(u: cp.ndarray):
+    def encodeAmp2Phase(u: cp.ndarray, n: float):
         Un = Holo.normalize(u) * 255
         M = cp.abs(Un)
-        n = 1.2
         X = n - M
         Tn = cp.exp(1j * cp.pi * X) * cp.sinc(X)
-        T = Tn * cp.exp(1j * n * cp.angle(Un))
+        T = Tn * cp.exp(1j * n * (cp.angle(Un)))
         return T, cp.angle(T)
 
     @staticmethod

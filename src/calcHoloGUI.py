@@ -155,15 +155,22 @@ class MainWindow(QMainWindow):
         self.iterTargetInput.setValue(1)
         self.iterTargetInput.setEnabled(False)
 
+        enableSSIMText = QLabel("计算SSIM")
         self.enableSSIMChk = QCheckBox()
         self.enableSSIMChk.setEnabled(False)
         self.enableSSIMChk.setChecked(True)
-        enableSSIMText = QLabel("计算SSIM")
 
+        enableAmpEncText = QLabel("编码振幅信息")
         self.enableAmpEncChk = QCheckBox()
+        self.enableAmpEncChk.clicked.connect(lambda: self.orderInput.setEnabled(self.enableAmpEncChk.isChecked()))
         self.enableAmpEncChk.setEnabled(False)
         self.enableAmpEncChk.setChecked(False)
-        enableAmpEncText = QLabel("编码振幅信息")
+
+        orderInputText = QLabel("衍射阶数")
+        self.orderInput = QDoubleSpinBox()
+        self.orderInput.setRange(0, 10)
+        self.orderInput.setValue(1)
+        self.orderInput.setEnabled(False)
 
         self.calcHoloBtn = QPushButton(' 计算全息图')
         calcHoloBtnIcon = QIcon(QPixmap('../res/svg/calculator.svg'))
@@ -193,8 +200,10 @@ class MainWindow(QMainWindow):
         calHoloLayout.addWidget(self.enableSSIMChk, 5, 2, 1, 1)
         calHoloLayout.addWidget(enableAmpEncText, 5, 3, 1, 2)
         calHoloLayout.addWidget(self.enableAmpEncChk, 5, 5, 1, 1)
-        calHoloLayout.addWidget(self.calcHoloBtn, 6, 0, 1, 6)
-        calHoloLayout.addWidget(self.saveHoloBtn, 7, 0, 1, 6)
+        calHoloLayout.addWidget(orderInputText, 6, 0, 1, 2)
+        calHoloLayout.addWidget(self.orderInput, 6, 2, 1, 4)
+        calHoloLayout.addWidget(self.calcHoloBtn, 7, 0, 1, 6)
+        calHoloLayout.addWidget(self.saveHoloBtn, 8, 0, 1, 6)
         calHoloLayout.setColumnStretch(0, 1)
         calHoloLayout.setColumnStretch(1, 1)
         calHoloLayout.setColumnStretch(2, 1)
@@ -762,7 +771,7 @@ class MainWindow(QMainWindow):
 
                 u, phase = algorithm.iterate()
                 if self.enableAmpEncChk.isChecked():
-                    u, phase = Holo.encodeAmp2Phase(u)
+                    u, phase = Holo.encodeAmp2Phase(u, self.orderInput.value())
 
             except Exception as err:
                 logHandler.error(f"Err in iteration: {err}")
@@ -776,7 +785,8 @@ class MainWindow(QMainWindow):
                 self.holoImg = cp.asnumpy(Holo.genHologram(phase))
                 self.holoU = cp.asnumpy(u)
 
-                self.holoImgRotated = cv2.flip(self.holoImg, 1)
+                self.holoImgRotated = cv2.rotate(self.holoImg, cv2.ROTATE_90_CLOCKWISE)
+                # cv2.flip(self.holoImg, 1)
 
                 tEnd = time.time()
 
