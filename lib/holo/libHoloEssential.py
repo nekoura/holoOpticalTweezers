@@ -1,7 +1,5 @@
 import cupy as cp
 import numpy as np
-import torch
-from pytorch_msssim import ms_ssim
 
 
 class Holo:
@@ -26,7 +24,6 @@ class Holo:
         self.uniList = kwargs.get('uniList', [])
         self.effiList = kwargs.get('effiList', [])
         self.RMSEList = kwargs.get('RMSEList', [])
-        self.SSIMList = kwargs.get('SSIMList', [])
 
         self.signalRegion = self.targetImg > 0
         self.nonSigRegion = self.targetImg == 0
@@ -64,17 +61,6 @@ class Holo:
         )
         self.RMSEList.append(float(RMSE))
 
-    def SSIMCalc(self):
-        current = torch.from_numpy(
-            np.expand_dims(np.expand_dims(cp.asnumpy(self.normalizedAmp), axis=0), axis=0)
-        )
-        target = torch.from_numpy(
-            np.expand_dims(np.expand_dims(cp.asnumpy(self.targetImg), axis=0), axis=0)
-        )
-        SSIM = ms_ssim(current, target, data_range=1,)
-
-        self.SSIMList.append(float(SSIM))
-
     def iterAnalyze(self) -> bool:
         """
         迭代指标评价
@@ -89,25 +75,10 @@ class Holo:
         self.efficiencyCalc()
         # 检查相位恢复结果的RMSE
         self.RMSECalc()
-        # 检查相位恢复结果的SSIM
-        if self.enableSSIM:
-            self.SSIMCalc()
 
         if self.iterTarget[0] == 0:
             # RMSE小于等于设置阈值
             if self.RMSEList[-1] <= self.iterTarget[1]:
-                return True
-        elif self.iterTarget[0] == 1:
-            # SSIM大于等于设置阈值
-            if self.SSIMList[-1] >= self.iterTarget[1]:
-                return True
-        elif self.iterTarget[0] == 2:
-            # 光能利用率大于等于设置阈值
-            if self.effiList[-1] >= self.iterTarget[1]:
-                return True
-        elif self.iterTarget[0] == 3:
-            # 均匀度大于等于设置阈值
-            if self.uniList[-1] >= self.iterTarget[1]:
                 return True
 
     def phaseInitialization(self) -> cp.array:
