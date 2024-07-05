@@ -1,5 +1,4 @@
 import sys
-import time
 import argparse
 import logging
 import colorlog
@@ -72,7 +71,7 @@ class Utils:
         return args
 
     @staticmethod
-    def folderPathCheck(path):
+    def folderPathCheck(path: str):
         """
         [工具类] 确认目标路径已被创建
 
@@ -81,21 +80,19 @@ class Utils:
         :rtype: str
         """
         parent = Path(path).parent
-        if Path(parent).exists:
+        if parent.exists():
             pass
         else:
-            Path.mkdir(parent)
+            parent.mkdir()
 
         return path
 
     @staticmethod
-    def getLog(consoleLevel=logging.WARNING, fileLevel=logging.DEBUG, writeLogFile=False):
+    def getLog(consoleLevel=logging.INFO):
         """
         [工具类] log组件
 
-        :param bool writeLogFile: 是否写入log文件
         :param int consoleLevel: 控制台日志级别
-        :param int fileLevel: 文件日志级别
         :return: 日志句柄
         """
         logger = logging.getLogger()
@@ -118,23 +115,6 @@ class Utils:
             )
         )
         logger.addHandler(consoleHandler)
-
-        # log打印到文件
-        if writeLogFile is True:
-            logFileHandler = logging.FileHandler(
-                filename=Utils.folderPathCheck(f"../log/log_{time.strftime('%Y%m%d%H%M%S')}.txt"),
-                encoding='utf8'
-            )
-            logFileHandler.setLevel(fileLevel)
-            logFileHandler.setFormatter(
-                logging.Formatter(
-                    fmt=f"[%(levelname)s] [%(asctime)s.%(msecs)03d] "
-                        f"%(funcName)s (line %(lineno)d): %(message)s",
-                    datefmt='%Y-%m-%d %H:%M:%S'
-                )
-            )
-            logger.addHandler(logFileHandler)
-            logger.info(f"log will print to file '../log/log_{time.strftime('%Y%m%d%H%M%S')}.txt'")
 
         return logger
 

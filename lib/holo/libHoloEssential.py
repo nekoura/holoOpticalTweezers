@@ -1,5 +1,6 @@
 import cupy as cp
 import numpy as np
+from PyQt6.QtCore import QThread, pyqtSignal
 
 
 class Holo:
@@ -153,3 +154,17 @@ class Holo:
             )
         )
         return cp.asnumpy(H * uFFT)
+
+
+class HoloCalcWorker(QThread):
+    resultSig = pyqtSignal(cp.ndarray, cp.ndarray)
+
+    def __init__(self, instance):
+        super().__init__()
+        self.instance = instance  # 存储传入的实例
+
+    def run(self):
+        # 执行一些耗时的任务
+        u, phase = self.instance.iterate()
+        # 发送结果信号
+        self.resultSig.emit(u, phase)
