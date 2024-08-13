@@ -1,12 +1,11 @@
 import sys
 import ctypes
 import time
-import serial
 import cv2
 import cupy as cp
 import numpy as np
 from pathlib import Path
-from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, QSize, qInstallMessageHandler, QRect
+from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, QSize, QRect, qInstallMessageHandler
 from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon, QImage, QPainter, QPen
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
     QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
@@ -16,86 +15,6 @@ from lib.utils.utils import Utils, ImgProcess
 from lib.holo.libHoloAlgmGPU import WCIA
 from lib.holo.libHoloEssential import Holo, HoloCalcWorker
 from lib.cam.camAPI import CameraMiddleware
-from lib.laser.laserAPI import LaserMiddleWare
-
-
-class VideoFrameWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.frame = QImage()
-        self.marks = []
-        self.currMark = None
-
-    def paintEvent(self, event):
-        # 获取绘图设备
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-
-        # 绘制视频帧
-        if not self.frame.isNull():
-            windowAspect = self.width() / self.height()
-            imageAspect = self.frame.width() / self.frame.height()
-
-            # 根据宽高比确定缩放比例
-            if windowAspect < imageAspect:
-                scaleFactor = self.width() / self.frame.width()
-            else:
-                scaleFactor = self.height() / self.frame.height()
-
-            # 计算缩放后的图像尺寸
-            scaledSize = QSize(
-                int(self.frame.width() * scaleFactor), int(self.frame.height() * scaleFactor)
-            )
-
-            # 缩放图像
-            pixmap = QPixmap.fromImage(
-                self.frame.scaled(
-                    scaledSize,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
-
-            # 计算图像绘制的起始位置以居中显示
-            x = (self.width() - pixmap.width()) // 2
-            y = (self.height() - pixmap.height()) // 2
-
-            # 绘制缩放后的图像
-            painter.drawPixmap(x, y, pixmap)
-
-            # 绘制标记
-            for mark in self.marks:
-                painter.setPen(QPen(Qt.GlobalColor.white, 2))  # 设置标记颜色和线宽
-                painter.drawRect(mark)
-
-            painter.end()
-        else:
-            painter.end()
-
-    def setPixmap(self, frame):
-        # 更新视频帧
-        self.frame = frame
-        self.repaint()  # 重绘整个窗口
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 在鼠标点击位置添加标记
-            self.marks.append(QRect(event.pos().x() - 10, event.pos().y() - 10, 20, 20))
-            self.repaint()  # 重绘标记
-
-        if event.button() == Qt.MouseButton.RightButton:
-            for mark in self.marks:
-                if mark.contains(event.pos()):
-                    self.currMark = mark
-                    break
-            else:  # 如果没有标记被选中，重置选中状态
-                self.currMark = None
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.RightButton and self.currMark:
-            self.marks.remove(self.currMark)
-            self.currMark = None  # 重置选中状态
-            self.update()  # 重绘窗口以反映变化
 
 
 class MainWindow(QMainWindow):
@@ -135,9 +54,8 @@ class MainWindow(QMainWindow):
 
         self._initUI()
 
-        if any(arg == '-ac' or arg == '--auto-open-camera' for arg in sys.argv[1:]):
-            self.toggleCam()
-            logHandler.info("Camera started automatically.")
+        self.toggleCam()
+        logHandler.info("Camera started automatically.")
 
     def _initUI(self):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SLM Holograph Generator")
@@ -148,33 +66,32 @@ class MainWindow(QMainWindow):
 
         # ==== 控制区域 ====
 
-        # 输入功能区
-        self.snapFromCamBtn = QPushButton('从相机捕获')
-        self.snapFromCamBtn.clicked.connect(self.snapFromCam)
-        self.snapFromCamBtn.setEnabled(False)
+        # 相机功能区
+        self.snapBtn = QPushButton('抓图')
+        self.snapBtn.clicked.connect(self.snapImg)
+        self.snapBtn.setEnabled(False)
 
-        openTargetFileBtn = QPushButton('新的目标图...')
-        openTargetFileBtn.clicked.connect(self.openTargetImg)
+        expTimeText = QLabel("曝光 (ms)")
 
-        openHoloFileBtn = QPushButton('已有全息图...')
-        openHoloFileBtn.clicked.connect(self.openHoloImg)
+        self.expTimeInput = QSpinBox()
+        self.expTimeInput.setEnabled(False)
+        self.expTimeInput.textChanged.connect(self.expTimeSet)
 
-        inputTipsText = QLabel("欲载入已有全息图，相同目录下需存在保存全息图时生成的同名.npy文件")
-        inputTipsText.setStyleSheet("color:#999")
-        inputTipsText.setWordWrap(True)
+        camCtrlLayout = QGridLayout()
+        camCtrlLayout.addWidget(expTimeText, 0, 0, 1, 2)
+        camCtrlLayout.addWidget(self.expTimeInput, 0, 2, 1, 2)
+        camCtrlLayout.addWidget(self.snapBtn, 0, 4, 1, 2)
+        camCtrlLayout.setColumnStretch(0, 1)
+        camCtrlLayout.setColumnStretch(1, 1)
+        camCtrlLayout.setColumnStretch(2, 1)
+        camCtrlLayout.setColumnStretch(3, 1)
+        camCtrlLayout.setColumnStretch(4, 1)
+        camCtrlLayout.setColumnStretch(5, 1)
 
-        inputImgLayout = QGridLayout()
-        inputImgLayout.addWidget(openTargetFileBtn, 0, 0, 1, 1)
-        inputImgLayout.addWidget(openHoloFileBtn, 0, 1, 1, 1)
-        inputImgLayout.addWidget(self.snapFromCamBtn, 1, 0, 1, 2)
-        inputImgLayout.addWidget(inputTipsText, 2, 0, 1, 2)
-        inputImgLayout.setColumnStretch(0, 1)
-        inputImgLayout.setColumnStretch(1, 1)
+        camCtrlGroupBox = QGroupBox("相机")
+        camCtrlGroupBox.setLayout(camCtrlLayout)
 
-        inputImgGroupBox = QGroupBox("输入")
-        inputImgGroupBox.setLayout(inputImgLayout)
-
-        # 全息图计算功能区
+        # 计算参数功能区
         holoAlgmText = QLabel("全息算法")
 
         self.holoAlgmSel = QComboBox()
@@ -206,19 +123,38 @@ class MainWindow(QMainWindow):
         self.iterTargetInput.setValue(1)
         self.iterTargetInput.setEnabled(False)
 
-        enableAmpEncText = QLabel("编码振幅信息")
-        self.enableAmpEncChk = QCheckBox()
-        self.enableAmpEncChk.clicked.connect(
-            lambda: self.orderInput.setEnabled(self.enableAmpEncChk.isChecked())
-        )
-        self.enableAmpEncChk.setEnabled(False)
-        self.enableAmpEncChk.setChecked(False)
+        holoSetLayout = QGridLayout()
+        holoSetLayout.addWidget(holoAlgmText, 0, 0, 1, 2)
+        holoSetLayout.addWidget(self.holoAlgmSel, 0, 2, 1, 4)
+        holoSetLayout.addWidget(initPhaseText, 1, 0, 1, 2)
+        holoSetLayout.addWidget(self.initPhaseSel, 1, 2, 1, 4)
+        holoSetLayout.addWidget(maxIterNumText, 2, 0, 1, 2)
+        holoSetLayout.addWidget(self.maxIterNumInput, 2, 2, 1, 4)
+        holoSetLayout.addWidget(iterTargetText, 3, 0, 1, 6)
+        holoSetLayout.addWidget(self.iterTargetSel, 4, 0, 1, 4)
+        holoSetLayout.addWidget(self.iterTargetInput, 4, 4, 1, 2)
+        holoSetLayout.setColumnStretch(0, 1)
+        holoSetLayout.setColumnStretch(1, 1)
+        holoSetLayout.setColumnStretch(2, 1)
+        holoSetLayout.setColumnStretch(3, 1)
+        holoSetLayout.setColumnStretch(4, 1)
+        holoSetLayout.setColumnStretch(5, 1)
 
-        orderInputText = QLabel("衍射阶数")
-        self.orderInput = QDoubleSpinBox()
-        self.orderInput.setRange(0, 10)
-        self.orderInput.setValue(2)
-        self.orderInput.setEnabled(False)
+        holoSetGroupBox = QGroupBox("计算参数")
+        holoSetGroupBox.setLayout(holoSetLayout)
+
+        # 输入功能区
+        singleCalcText = QLabel("单次计算")
+
+        openTargetFileBtn = QPushButton('新的目标图...')
+        openTargetFileBtn.clicked.connect(self.openTargetImg)
+
+        openHoloFileBtn = QPushButton('已有全息图...')
+        openHoloFileBtn.clicked.connect(self.openHoloImg)
+
+        inputTipsText = QLabel("欲载入已有全息图，相同目录下需存在保存全息图时生成的同名.npy文件")
+        inputTipsText.setStyleSheet("color:#999")
+        inputTipsText.setWordWrap(True)
 
         self.calcHoloBtn = QPushButton(QIcon(QPixmap('../res/svg/calculator.svg')), ' 计算全息图')
         self.calcHoloBtn.clicked.connect(self.calcHoloImg)
@@ -228,82 +164,67 @@ class MainWindow(QMainWindow):
         self.saveHoloBtn.clicked.connect(self.saveHoloImg)
         self.saveHoloBtn.setEnabled(False)
 
-        calHoloLayout = QGridLayout()
-        calHoloLayout.addWidget(holoAlgmText, 0, 0, 1, 2)
-        calHoloLayout.addWidget(self.holoAlgmSel, 0, 2, 1, 4)
-        calHoloLayout.addWidget(initPhaseText, 1, 0, 1, 2)
-        calHoloLayout.addWidget(self.initPhaseSel, 1, 2, 1, 4)
-        calHoloLayout.addWidget(maxIterNumText, 2, 0, 1, 2)
-        calHoloLayout.addWidget(self.maxIterNumInput, 2, 2, 1, 4)
-        calHoloLayout.addWidget(iterTargetText, 3, 0, 1, 6)
-        calHoloLayout.addWidget(self.iterTargetSel, 4, 0, 1, 4)
-        calHoloLayout.addWidget(self.iterTargetInput, 4, 4, 1, 2)
-        calHoloLayout.addWidget(enableAmpEncText, 5, 0, 1, 2)
-        calHoloLayout.addWidget(self.enableAmpEncChk, 5, 2, 1, 1)
-        calHoloLayout.addWidget(orderInputText, 5, 3, 1, 1)
-        calHoloLayout.addWidget(self.orderInput, 5, 4, 1, 2)
-        calHoloLayout.addWidget(self.calcHoloBtn, 6, 0, 1, 6)
-        calHoloLayout.addWidget(self.saveHoloBtn, 7, 0, 1, 6)
-        calHoloLayout.setColumnStretch(0, 1)
-        calHoloLayout.setColumnStretch(1, 1)
-        calHoloLayout.setColumnStretch(2, 1)
-        calHoloLayout.setColumnStretch(3, 1)
-        calHoloLayout.setColumnStretch(4, 1)
-        calHoloLayout.setColumnStretch(5, 1)
+        autoCalcText = QLabel("自动计算")
 
-        calHoloGroupBox = QGroupBox("全息图计算")
-        calHoloGroupBox.setLayout(calHoloLayout)
+        self.snapFromCamBtn = QPushButton('从相机捕获')
+        self.snapFromCamBtn.clicked.connect(self.snapFromCam)
+        self.snapFromCamBtn.setEnabled(False)
 
-        # 相机功能区
-        self.toggleCamBtn = QPushButton('打开')
-        self.toggleCamBtn.clicked.connect(self.toggleCam)
+        calcLayout = QGridLayout()
+        calcLayout.addWidget(singleCalcText, 0, 0, 1, 2)
+        calcLayout.addWidget(openTargetFileBtn, 1, 0, 1, 1)
+        calcLayout.addWidget(openHoloFileBtn, 1, 1, 1, 1)
+        calcLayout.addWidget(inputTipsText, 2, 0, 1, 2)
+        calcLayout.addWidget(self.calcHoloBtn, 3, 0, 1, 1)
+        calcLayout.addWidget(self.saveHoloBtn, 3, 1, 1, 1)
+        calcLayout.addWidget(autoCalcText, 4, 0, 1, 2)
+        calcLayout.addWidget(self.snapFromCamBtn, 5, 0, 1, 2)
+        calcLayout.setColumnStretch(0, 1)
+        calcLayout.setColumnStretch(1, 1)
 
-        self.snapBtn = QPushButton('抓图')
-        self.snapBtn.clicked.connect(self.snapImg)
-        self.snapBtn.setEnabled(False)
+        calcGroupBox = QGroupBox("计算")
+        calcGroupBox.setLayout(calcLayout)
 
-        expTimeText = QLabel("曝光 (ms)")
+        # 目标图显示区域
+        self.targetImgPreview = QLabel()
+        self.targetImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
+        self.targetImgPreview.setFixedSize(180, 180)
 
-        self.expTimeInput = QSpinBox()
-        self.expTimeInput.setEnabled(False)
-        self.expTimeInput.textChanged.connect(self.expTimeSet)
+        targetImgHLayout = QHBoxLayout()
+        targetImgHLayout.addWidget(self.targetImgPreview)
+        targetImgVLayout = QVBoxLayout()
+        targetImgVLayout.addLayout(targetImgHLayout)
+        targetImgGroupBox = QGroupBox("目标图")
+        targetImgGroupBox.setLayout(targetImgVLayout)
 
-        camCtrlLayout = QGridLayout()
-        camCtrlLayout.addWidget(self.toggleCamBtn, 0, 0, 1, 2)
-        camCtrlLayout.addWidget(self.snapBtn, 0, 2, 1, 4)
-        camCtrlLayout.addWidget(expTimeText, 1, 0, 1, 2)
-        camCtrlLayout.addWidget(self.expTimeInput, 1, 2, 1, 4)
-        camCtrlLayout.setColumnStretch(0, 1)
-        camCtrlLayout.setColumnStretch(1, 1)
-        camCtrlLayout.setColumnStretch(2, 1)
-        camCtrlLayout.setColumnStretch(3, 1)
-        camCtrlLayout.setColumnStretch(4, 1)
-        camCtrlLayout.setColumnStretch(5, 1)
+        # 重建光场仿真显示区域
+        self.reconstructImgPreview = QLabel()
+        self.reconstructImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
+        self.reconstructImgPreview.setFixedSize(180, 180)
 
-        camCtrlGroupBox = QGroupBox("相机")
-        camCtrlGroupBox.setLayout(camCtrlLayout)
+        reconstructImgHLayout = QHBoxLayout()
+        reconstructImgHLayout.addWidget(self.reconstructImgPreview)
+        reconstructImgVLayout = QVBoxLayout()
+        reconstructImgVLayout.addLayout(reconstructImgHLayout)
+        reconstructImgGroupBox = QGroupBox("重建预览")
+        reconstructImgGroupBox.setLayout(reconstructImgVLayout)
 
         ctrlAreaLayout = QVBoxLayout()
-        ctrlAreaLayout.addWidget(inputImgGroupBox)
-        ctrlAreaLayout.addWidget(calHoloGroupBox)
-        ctrlAreaLayout.addStretch(1)
         ctrlAreaLayout.addWidget(camCtrlGroupBox)
-        if not any(arg == '-bl' or arg == '--bypass-laser-detection' for arg in sys.argv[1:]):
-            self._initLaserUI()
-            ctrlAreaLayout.addWidget(self.laserCtrlGroupBox)
-        else:
-            logHandler.warning("Bypass laser detection mode, laser control component will not be loaded.")
+        ctrlAreaLayout.addWidget(holoSetGroupBox)
+        ctrlAreaLayout.addWidget(calcGroupBox)
+        ctrlAreaLayout.addStretch(1)
+        ctrlAreaLayout.addWidget(targetImgGroupBox)
+        ctrlAreaLayout.addWidget(reconstructImgGroupBox)
 
         ctrlArea = QWidget()
-        ctrlArea.setObjectName("ctrlArea")
         ctrlArea.setLayout(ctrlAreaLayout)
-        ctrlArea.setFixedWidth(280)
 
         # ==== 显示区域 ====
         # 相机预览区域
         self.camPreview = VideoFrameWidget()
-        # self.camPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        # self.camPreview.setText("点击 [打开相机] 以预览...")
         self.camPreview.setMinimumSize(480, 360)
 
         camPreviewHLayout = QHBoxLayout()
@@ -312,53 +233,6 @@ class MainWindow(QMainWindow):
         camPreviewVLayout.addLayout(camPreviewHLayout)
         camPreviewGroupBox = QGroupBox("相机预览")
         camPreviewGroupBox.setLayout(camPreviewVLayout)
-
-        # 目标图显示区域
-        self.targetImgPreview = QLabel()
-        self.targetImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
-        self.targetImgPreview.setMaximumSize(180, 180)
-
-        targetImgHLayout = QHBoxLayout()
-        targetImgHLayout.addWidget(self.targetImgPreview)
-        targetImgVLayout = QVBoxLayout()
-        targetImgVLayout.addLayout(targetImgHLayout)
-        targetImgWidget = QGroupBox("目标图")
-        targetImgWidget.setLayout(targetImgVLayout)
-
-        # 全息图显示区域
-        self.holoImgPreview = QLabel()
-        self.holoImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
-        self.holoImgPreview.setMaximumSize(180, 180)
-
-        holoImgHLayout = QHBoxLayout()
-        holoImgHLayout.addWidget(self.holoImgPreview)
-        holoImgVLayout = QVBoxLayout()
-        holoImgVLayout.addLayout(holoImgHLayout)
-        holoImgWidget = QGroupBox("全息图")
-        holoImgWidget.setLayout(holoImgVLayout)
-
-        # 重建光场仿真显示区域
-        self.reconstructImgPreview = QLabel()
-        self.reconstructImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
-        self.reconstructImgPreview.setMaximumSize(180, 180)
-
-        reconstructImgHLayout = QHBoxLayout()
-        reconstructImgHLayout.addWidget(self.reconstructImgPreview)
-        reconstructImgVLayout = QVBoxLayout()
-        reconstructImgVLayout.addLayout(reconstructImgHLayout)
-        reconstructImgWidget = QGroupBox("重建预览")
-        reconstructImgWidget.setLayout(reconstructImgVLayout)
-
-        calcInfoLayout = QVBoxLayout()
-        calcInfoLayout.addWidget(targetImgWidget)
-        calcInfoLayout.addWidget(holoImgWidget)
-        calcInfoLayout.addWidget(reconstructImgWidget)
-
-        calcInfoWidget = QWidget()
-        calcInfoWidget.setLayout(calcInfoLayout)
 
         # ==== 状态栏 ====
 
@@ -380,12 +254,9 @@ class MainWindow(QMainWindow):
         self.progressBar.setValue(0)
 
         # ==== 窗体 ====
-        comboArea = QTabWidget()
-        comboArea.addTab(ctrlArea, "控制")
-        comboArea.addTab(calcInfoWidget, "视图")
 
         layout = QHBoxLayout()
-        layout.addWidget(comboArea)
+        layout.addWidget(ctrlArea)
         layout.addWidget(camPreviewGroupBox)
         layout.setStretch(0, 1)
         layout.setStretch(1, 5)
@@ -394,61 +265,6 @@ class MainWindow(QMainWindow):
         widget.setLayout(layout)
         self.setCentralWidget(widget)
         self.setStatusBar(self.statusBar)
-
-    def _initLaserUI(self):
-        # 激光器功能区
-        self.laserPortSel = QComboBox()
-        self.laserPortSel.setEnabled(False)
-
-        self.connectLaserBtn = QPushButton(' 连接')
-        self.connectLaserIcon = QIcon(QPixmap('../res/svg/plug-fill.svg'))
-        self.disconnectLaserIcon = QIcon(QPixmap('../res/svg/eject-fill.svg'))
-        self.connectLaserBtn.setIcon(self.connectLaserIcon)
-        self.connectLaserBtn.setIconSize(QSize(14, 14))
-        self.connectLaserBtn.clicked.connect(self.toggleLaserConnection)
-        self.connectLaserBtn.setEnabled(False)
-
-        self.toggleLaserBtn = QPushButton(' 启动激光')
-        self.emitLaserIcon = QIcon(QPixmap('../res/svg/sun-fill.svg'))
-        self.stopLaserIcon = QIcon(QPixmap('../res/svg/x-octagon-fill.svg'))
-        self.toggleLaserBtn.setIcon(self.emitLaserIcon)
-        self.toggleLaserBtn.setIconSize(QSize(14, 14))
-        self.toggleLaserBtn.clicked.connect(self.toggleLaserEmit)
-        self.toggleLaserBtn.setEnabled(False)
-
-        laserPwrText = QLabel("功率 (mW)")
-
-        self.laserPwrInput = QSpinBox()
-        self.laserPwrInput.setRange(0, 300)
-        self.laserPwrInput.setValue(10)
-        self.laserPwrInput.setEnabled(False)
-
-        self.setLaserPwrBtn = QPushButton(' 设定')
-        confirmIcon = QIcon(QPixmap('../res/svg/check-lg.svg'))
-        self.setLaserPwrBtn.setIcon(confirmIcon)
-        self.setLaserPwrBtn.setIconSize(QSize(14, 14))
-        self.setLaserPwrBtn.clicked.connect(self.setLaserPwr)
-        self.setLaserPwrBtn.setEnabled(False)
-
-        laserCtrlLayout = QGridLayout()
-        laserCtrlLayout.addWidget(self.laserPortSel, 0, 0, 1, 6)
-        laserCtrlLayout.addWidget(self.connectLaserBtn, 1, 0, 1, 2)
-        laserCtrlLayout.addWidget(self.toggleLaserBtn, 1, 2, 1, 4)
-        laserCtrlLayout.addWidget(laserPwrText, 2, 0, 1, 2)
-        laserCtrlLayout.addWidget(self.laserPwrInput, 2, 2, 1, 2)
-        laserCtrlLayout.addWidget(self.setLaserPwrBtn, 2, 4, 1, 2)
-        laserCtrlLayout.setColumnStretch(0, 1)
-        laserCtrlLayout.setColumnStretch(1, 1)
-        laserCtrlLayout.setColumnStretch(2, 1)
-        laserCtrlLayout.setColumnStretch(3, 1)
-        laserCtrlLayout.setColumnStretch(4, 1)
-        laserCtrlLayout.setColumnStretch(5, 1)
-
-        self.laserCtrlGroupBox = QGroupBox("激光器")
-        self.laserCtrlGroupBox.setLayout(laserCtrlLayout)
-
-        self.laser = LaserMiddleWare()
-        self.deviceUpdatedEvent()
 
     def closeEvent(self, event):
         """
@@ -459,82 +275,9 @@ class MainWindow(QMainWindow):
                 widget.close()
 
         self.cam.closeCamera()
-        if not any(arg == '-bl' or arg == '--bypass-laser-detection' for arg in sys.argv[1:]):
-            self.laser.closeComPort()
 
         logHandler.info(f"Bye.")
         event.accept()
-
-    def toggleLaserConnection(self):
-        """
-        [UI操作] 点击连接激光器
-        """
-        if self.laser.device:
-            self.laser.closeComPort()
-            self.laser.device = None
-            logHandler.info(f"Laser disconnected.")
-            self.statusBar.showMessage(f"激光器已断开")
-            self.connectLaserBtn.setText(' 连接')
-            self.connectLaserBtn.setIcon(self.connectLaserIcon)
-        else:
-            selLaserPortIndex = self.laserPortSel.currentIndex()
-            if self.laser.portList is not None and selLaserPortIndex is not None:
-                self.laser.port = str(self.laser.portList[selLaserPortIndex].name)
-                try:
-                    self.laser.openComPort()
-                except serial.serialutil.SerialException as err:
-                    QMessageBox.critical(
-                        self,
-                        '错误',
-                        f'未能打开激光器控制盒。\n '
-                        f'详细信息：{err} \n'
-                        f'请尝试重新连接USB线，并确认端口选择正确、驱动安装正确或未被其他程序占用。'
-                    )
-                    logHandler.error(f"Unable to open laser. {err}")
-                else:
-                    logHandler.info(f"Laser connected. Device at {self.laser.port}.")
-                    self.statusBar.showMessage(f"激光器控制盒已连接 ({self.laser.port})")
-                    self.connectLaserBtn.setText(' 断开')
-                    self.connectLaserBtn.setIcon(self.disconnectLaserIcon)
-
-        self.laserPortSel.setEnabled(not self.laserPortSel.isEnabled())
-        self.toggleLaserBtn.setEnabled(not self.laserPortSel.isEnabled())
-        if self.toggleLaserBtn.isEnabled():
-            self.toggleLaserBtn.setStyleSheet("color: #000000; background-color: #f38d05;")
-        else:
-            self.toggleLaserBtn.setStyleSheet("")
-        self.laserPwrInput.setEnabled(not self.laserPortSel.isEnabled())
-        self.setLaserPwrBtn.setEnabled(not self.laserPortSel.isEnabled())
-
-    def toggleLaserEmit(self):
-        """
-        [UI操作] 点击激光器出光
-        """
-        if self.laser.isEmitting:
-            self.laser.setConfig('OFF')
-            logHandler.info(f"Laser Config send. config: OFF")
-            self.toggleLaserBtn.setText(' 启动激光')
-            self.toggleLaserBtn.setIcon(self.emitLaserIcon)
-            self.toggleLaserBtn.setStyleSheet("color: #000000; background-color: #f38d05;")
-            self.statusBar.showMessage(f"激光器已停止")
-        else:
-            self.laser.setConfig('ON')
-            logHandler.info(f"Laser Config send. config: ON")
-            self.toggleLaserBtn.setText(' 停止激光')
-            self.toggleLaserBtn.setIcon(self.stopLaserIcon)
-            self.toggleLaserBtn.setStyleSheet("color: #ffffff; background-color: #ff0000;")
-            self.statusBar.showMessage(f"激光器已出光，请注意操作安全。")
-
-        self.connectLaserBtn.setEnabled(not self.connectLaserBtn.isEnabled())
-
-    def setLaserPwr(self):
-        """
-        [UI操作] 点击设置激光器功率
-        """
-        if self.laser.device:
-            self.laser.setConfig(self.laserPwrInput.value())
-            self.statusBar.showMessage(f"激光器功率设定为 {self.laserPwrInput.value()}mW")
-            logHandler.info(f"Laser Config send. config: pwr {self.laserPwrInput.value()}")
 
     def toggleCam(self):
         """
@@ -545,11 +288,6 @@ class MainWindow(QMainWindow):
 
             logHandler.info(f"Camara closed.")
             self.statusBar.showMessage(f"相机已停止")
-
-            # self.camPreview.setPixmap(QImage(64, 64, QImage.Format.Format_RGB888).fill(Qt.GlobalColor.white))
-            # self.camPreview.setText("点击 [打开相机] 以预览...")
-
-            self.toggleCamBtn.setText("打开")
         else:
             result = self.cam.openCamera()
             if result == -1:
@@ -565,7 +303,6 @@ class MainWindow(QMainWindow):
                 logHandler.info(f"Camara opened. Resolution: {self.cam.imgWidth}x{self.cam.imgHeight}")
                 self.statusBar.showMessage(f"相机分辨率 {self.cam.imgWidth}x{self.cam.imgHeight}")
 
-                self.toggleCamBtn.setText("关闭")
                 expMin, expMax, expCur = self.cam.device.get_ExpTimeRange()
                 self.expTimeInput.setRange(10, 1000)
                 self.expTimeInput.setValue(int(expCur / 1000))
@@ -825,10 +562,8 @@ class MainWindow(QMainWindow):
                 self.statusBar.showMessage(f"已加载图像{targetDir}，分辨率{imgRes}")
                 self.holoImg = None
                 ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
-                ImgProcess.cvImg2QPixmap(self.holoImgPreview, None)
                 ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, None)
 
-                self.holoImgPreview.setText("从输入模块载入已有全息图 \n或从目标图 [计算全息图]")
                 self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
 
                 self.calcHoloBtn.setEnabled(True)
@@ -837,7 +572,6 @@ class MainWindow(QMainWindow):
                 self.maxIterNumInput.setEnabled(True)
                 self.iterTargetSel.setEnabled(True)
                 self.iterTargetInput.setEnabled(True)
-                self.enableAmpEncChk.setEnabled(True)
                 self.secondStatusInfo.setText(f"就绪")
                 self.progressBar.reset()
                 self.progressBar.setValue(0)
@@ -853,7 +587,6 @@ class MainWindow(QMainWindow):
                 self.statusBar.showMessage(f"已加载图像{holoDir}，分辨率{imgRes}")
                 self.pendingImg = None
                 ImgProcess.cvImg2QPixmap(self.targetImgPreview, None)
-                ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
                 self.reconstructResult(self.holoU, 50, 532e-6)
 
                 self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
@@ -870,7 +603,6 @@ class MainWindow(QMainWindow):
                 self.maxIterNumInput.setEnabled(False)
                 self.iterTargetSel.setEnabled(False)
                 self.iterTargetInput.setEnabled(False)
-                self.enableAmpEncChk.setEnabled(True)
         else:
             logHandler.warning(f"No image loaded. ")
 
@@ -993,11 +725,11 @@ class SecondMonitorWindow(QMainWindow):
                 QMessageBox.critical(
                     self,
                     '错误',
-                    f'程序被配置为[自动检测LCOS设备]模式，但未检测到名为 "JDC EDK" 的LCOS硬件。\n'
+                    f'未检测到名为 "JDC EDK" 的LCOS硬件。\n'
                     f'请重新连接SLM，确认电源已打开，或在显示设置中确认配置正确。'
                 )
                 logHandler.error(
-                    f"Auto detect mode, No LCOS named 'JDC EDK' detected. "
+                    f"No LCOS named 'JDC EDK' detected. "
                     f"Check your connection, power status or screen configuration."
                 )
                 sys.exit()
@@ -1011,7 +743,6 @@ class SecondMonitorWindow(QMainWindow):
             if any(arg == '-bs' or arg == '--bypass-LCOS-detection' for arg in sys.argv[1:]):
                 self.setGeometry(screens[0].geometry().x(), screens[0].geometry().y(),
                                  screens[0].size().width(), screens[0].size().height())
-                logHandler.warning(f"Bypass LCOS detection mode, current monitor selected.")
 
                 QMessageBox.warning(
                     self,
@@ -1019,19 +750,99 @@ class SecondMonitorWindow(QMainWindow):
                     f'程序被配置为[绕过LCOS设备检测]模式。\n'
                     f'当前监视器被设置为LCOS监视器，屏幕可能闪烁。该功能仅供开发时使用。'
                 )
+                logHandler.warning(f"Bypass LCOS detection mode, current monitor selected.")
 
             else:
                 QMessageBox.critical(
                     self,
                     '错误',
-                    f'未检测到多显示器。\n'
+                    f'未检测到名为 "JDC EDK" 的LCOS硬件。\n'
                     f'请重新连接SLM，确认电源已打开，或在显示设置中确认配置正确。'
                 )
                 logHandler.error(
-                    f"No Multi-monitors Detected. "
+                    f"No LCOS named 'JDC EDK' detected. "
                     f"Check your connection, power status or screen configuration."
                 )
                 sys.exit()
+
+
+class VideoFrameWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.frame = QImage()
+        self.marks = []
+        self.currMark = None
+
+    def paintEvent(self, event):
+        # 获取绘图设备
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        # 绘制视频帧
+        if not self.frame.isNull():
+            windowAspect = self.width() / self.height()
+            imageAspect = self.frame.width() / self.frame.height()
+
+            # 根据宽高比确定缩放比例
+            if windowAspect < imageAspect:
+                scaleFactor = self.width() / self.frame.width()
+            else:
+                scaleFactor = self.height() / self.frame.height()
+
+            # 计算缩放后的图像尺寸
+            scaledSize = QSize(
+                int(self.frame.width() * scaleFactor), int(self.frame.height() * scaleFactor)
+            )
+
+            # 缩放图像
+            pixmap = QPixmap.fromImage(
+                self.frame.scaled(
+                    scaledSize,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+            )
+
+            # 计算图像绘制的起始位置以居中显示
+            x = (self.width() - pixmap.width()) // 2
+            y = (self.height() - pixmap.height()) // 2
+
+            # 绘制缩放后的图像
+            painter.drawPixmap(x, y, pixmap)
+
+            # 绘制标记
+            for mark in self.marks:
+                painter.setPen(QPen(Qt.GlobalColor.white, 2))  # 设置标记颜色和线宽
+                painter.drawRect(mark)
+
+            painter.end()
+        else:
+            painter.end()
+
+    def setPixmap(self, frame):
+        # 更新视频帧
+        self.frame = frame
+        self.repaint()  # 重绘整个窗口
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 在鼠标点击位置添加标记
+            self.marks.append(QRect(event.pos().x() - 10, event.pos().y() - 10, 20, 20))
+            self.repaint()  # 重绘标记
+
+        if event.button() == Qt.MouseButton.RightButton:
+            for mark in self.marks:
+                if mark.contains(event.pos()):
+                    self.currMark = mark
+                    break
+            else:  # 如果没有标记被选中，重置选中状态
+                self.currMark = None
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton and self.currMark:
+            self.marks.remove(self.currMark)
+            self.currMark = None  # 重置选中状态
+            self.update()  # 重绘窗口以反映变化
 
 
 if __name__ == '__main__':

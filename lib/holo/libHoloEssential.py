@@ -91,9 +91,6 @@ class Holo:
         if self.initPhase[0] == 1:
             # 以目标光场IFFT作为初始迭代相位以增强均匀性 v2
             phase = cp.fft.ifftshift(cp.fft.ifft2(self.targetImg))
-        elif self.initPhase[0] == 2:
-            # 自定义相位 todo:带限初始相位
-            phase = self.initPhase[1]
         else:
             # 以随机相位分布作为初始迭代相位 (默认）
             phase = cp.random.rand(self.targetImg.shape[0], self.targetImg.shape[1])

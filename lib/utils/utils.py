@@ -1,13 +1,16 @@
-import sys
+import os
 import argparse
 import logging
 import colorlog
+import math
+import sys
 import cv2
 import numpy as np
 from pathlib import Path
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, QDir
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QMessageBox
+import queue
 
 
 class Utils:
@@ -27,14 +30,14 @@ class Utils:
         :rtype: tuple
         """
         parser = argparse.ArgumentParser(
-            prog='calcHoloGUI',  # 程序名
-            description='SLM Holograph Generator',  # 描述
+            prog='calcHoloGUI',
+            description='SLM Holograph Generator',
             epilog=f'\tloglevel:\n'
                    f'\t10\t DEBUG\n'
                    f'\t20\t INFO\n'
                    f'\t30\t WARNING (default for console)\n'
                    f'\t40\t ERROR\n'
-                   f'\t50\t FATAL',  # 说明信息
+                   f'\t50\t FATAL',
             formatter_class=argparse.RawTextHelpFormatter
         )
         parser.add_argument(
@@ -75,7 +78,7 @@ class Utils:
         """
         [工具类] 确认目标路径已被创建
 
-        :param str path: 输入路径
+        :param path: 输入路径
         :return: 输出路径
         :rtype: str
         """
@@ -127,6 +130,52 @@ class Utils:
     def exceptionHandler(errtype, value, traceback):
         # 捕获异步异常并显示错误消息
         QMessageBox.critical(None, 'Error', f"{errtype}\n{value}\n{traceback}")
+
+    @staticmethod
+    def calcEucDist(p1, p2) -> float:
+        """
+        [工具类] 计算两点之间的欧几里得距离
+
+        :param p1: 点 1 坐标
+        :param p2: 点 2 坐标
+        :return: 距离
+        """
+        return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+    @staticmethod
+    def calcFileNum(path) -> int:
+        """
+        [工具类] 计算目录内文件数量
+
+        :param path: 目录
+        :return: 文件数量
+        """
+        return len(os.listdir(path))
+
+
+class Worker:
+    def process(self):
+        raise NotImplementedError
+
+    def post_process(self, result):
+        raise NotImplementedError
+
+
+class MessageQueue:
+    def __init__(self):
+        self.queue = queue.Queue()
+
+    def send(self, message):
+        self.queue.put(message)
+
+    def receive(self):
+        return self.queue.get()
+
+    def is_empty(self):
+        return self.queue.empty()
+
+    def size(self):
+        return self.queue.qsize()
 
 
 class ImgProcess:
@@ -210,3 +259,39 @@ class ImgProcess:
             return circles
         else:
             return []
+
+
+class ImageLoader:
+    def __init__(self, dirPath, interval):
+        super().__init__()
+        self.dirPath = dirPath
+        self.interval = interval
+        self.imageList = self.load()
+        self.currentIndex = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.showNext)
+        self.start()
+
+    def load(self):
+        imageList = []
+        for img in QDir(self.dirPath).entryList(['*.png', '*.jpg', '*.jpeg']):
+            imagePath = QDir(self.dirPath).filePath(img)
+            pixmap = QPixmap(imagePath)
+            if pixmap.isNull():
+                print(f"Warning: Cannot load {imagePath}")
+            else:
+                imageList.append(pixmap)
+        return imageList
+
+    def start(self):
+        self.timer.start(self.interval)
+
+    def stop(self):
+        self.timer.stop()
+
+    def showNext(self):
+        if self.currentIndex < len(self.imageList):
+            self.setPixmap(self.imageList[self.currentIndex])#
+            self.currentIndex += 1
+        else:
+            self.currentIndex = 0
