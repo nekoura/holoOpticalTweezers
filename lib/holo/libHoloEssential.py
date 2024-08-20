@@ -19,9 +19,8 @@ class Holo:
         self.targetImg = targetImg
         self.maxIterNum = maxIterNum
         self.initPhase = kwargs.get('initPhase', (0, None))
-        self.iterTarget = kwargs.get('iterTarget', (0, 0.95))
+        self.iterTarget = kwargs.get('iterTarget', (0, 0.01))
         self.normalizedAmp = None
-        self.enableSSIM = kwargs.get('enableSSIM', True)
         self.uniList = kwargs.get('uniList', [])
         self.effiList = kwargs.get('effiList', [])
         self.RMSEList = kwargs.get('RMSEList', [])
@@ -71,9 +70,9 @@ class Holo:
         :return: 是否终止迭代
         """
         # 检查相位恢复结果的均匀度
-        self.uniformityCalc()
+        # self.uniformityCalc()
         # 检查相位恢复结果的光能利用率
-        self.efficiencyCalc()
+        # self.efficiencyCalc()
         # 检查相位恢复结果的RMSE
         self.RMSECalc()
 

@@ -7,7 +7,7 @@ import sys
 import cv2
 import numpy as np
 from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer, QDir
+from PyQt6.QtCore import Qt, QTimer, QDir, pyqtSignal, QObject
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QMessageBox
 import queue
@@ -45,29 +45,10 @@ class Utils:
             choices=(10, 20, 30, 40, 50),
             required=False, help='Set console log level'
         )
-        parser.add_argument(
-            '-f', '--floglvl', default=-1, type=int,
-            choices=(10, 20, 30, 40, 50),
-            required=False, help='Set logfile log level and enable logfile'
-        )
-        parser.add_argument(
-            '-d', '--auto-detect', default=False, action='store_true',
-            required=False, help='Auto detect LCOS devices'
-        )
 
         parser.add_argument(
             '-bs', '--bypass-LCOS-detection', default=False, action='store_true',
             required=False, help='Bypass LCOS detection (set current monitor as LCOS, for development only)'
-        )
-
-        parser.add_argument(
-            '-bl', '--bypass-laser-detection', default=False, action='store_true',
-            required=False, help='Bypass Laser detection (if laser control is unnecessary)'
-        )
-
-        parser.add_argument(
-            '-ac', '--auto-open-camera', default=False, action='store_true',
-            required=False, help='Automatically open camera on startup'
         )
 
         args = parser.parse_args()
@@ -82,11 +63,13 @@ class Utils:
         :return: 输出路径
         :rtype: str
         """
-        parent = Path(path).parent
-        if parent.exists():
-            pass
-        else:
-            parent.mkdir()
+
+        filePath = Path(path)
+        if not filePath.exists():
+            if filePath.suffix:
+                filePath.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                filePath.mkdir(parents=True, exist_ok=True)
 
         return path
 
@@ -106,7 +89,7 @@ class Utils:
         consoleHandler.setFormatter(
             colorlog.ColoredFormatter(
                 fmt=f"%(log_color)s[%(levelname)s] [%(asctime)s] "
-                    f"%(funcName)s (line %(lineno)d): %(message)s",
+                    f"[%(lineno)d]: %(message)s",
                 datefmt='%Y-%m-%d %H:%M:%S',
                 log_colors={
                     'DEBUG': 'cyan',
@@ -152,30 +135,21 @@ class Utils:
         """
         return len(os.listdir(path))
 
+    @staticmethod
+    def timer(func):
+        """
+        [工具类] 修饰器：函数计时
+        """
+        def func_wrapper(*args, **kwargs):
+            from time import time
+            time_start = time()
+            result = func(*args, **kwargs)
+            time_end = time()
+            time_spend = time_end - time_start
+            print('%s cost time: %.3f s' % (func.__name__, time_spend))
+            return result
 
-class Worker:
-    def process(self):
-        raise NotImplementedError
-
-    def post_process(self, result):
-        raise NotImplementedError
-
-
-class MessageQueue:
-    def __init__(self):
-        self.queue = queue.Queue()
-
-    def send(self, message):
-        self.queue.put(message)
-
-    def receive(self):
-        return self.queue.get()
-
-    def is_empty(self):
-        return self.queue.empty()
-
-    def size(self):
-        return self.queue.qsize()
+        return func_wrapper
 
 
 class ImgProcess:
@@ -226,72 +200,3 @@ class ImgProcess:
         )
         obj.setPixmap(scaledPixmap)
 
-    def createGaussianBeamMask(self, image, beamWidth: int):
-        """
-        [图像处理] 生成以指定位置为中心的高斯光束的遮罩
-        :param image: 输入图像
-        :param beamWidth: 光斑直径
-        """
-        circles = self.detectCircles(image)
-        size = image.shape[:2]
-        combinedMask = np.zeros(size, dtype=np.float32)
-
-        X, Y = np.meshgrid(np.arange(size[1]), np.arange(size[0]))
-
-        for x, y, r in circles:
-            rSquared = ((X - x) ** 2 + (Y - y) ** 2)
-            phase = np.exp(-rSquared / (2 * beamWidth ** 2))
-            combinedMask += phase
-
-        return combinedMask
-
-    @staticmethod
-    def detectCircles(image):
-        """
-        [图像处理] 使用霍夫变换在图像中检测圆形
-        """
-        circles = cv2.HoughCircles(
-            image, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20,
-            param1=50, param2=30, minRadius=20, maxRadius=40
-        )
-        if circles is not None:
-            circles = np.round(circles[0, :]).astype("int")
-            return circles
-        else:
-            return []
-
-
-class ImageLoader:
-    def __init__(self, dirPath, interval):
-        super().__init__()
-        self.dirPath = dirPath
-        self.interval = interval
-        self.imageList = self.load()
-        self.currentIndex = 0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.showNext)
-        self.start()
-
-    def load(self):
-        imageList = []
-        for img in QDir(self.dirPath).entryList(['*.png', '*.jpg', '*.jpeg']):
-            imagePath = QDir(self.dirPath).filePath(img)
-            pixmap = QPixmap(imagePath)
-            if pixmap.isNull():
-                print(f"Warning: Cannot load {imagePath}")
-            else:
-                imageList.append(pixmap)
-        return imageList
-
-    def start(self):
-        self.timer.start(self.interval)
-
-    def stop(self):
-        self.timer.stop()
-
-    def showNext(self):
-        if self.currentIndex < len(self.imageList):
-            self.setPixmap(self.imageList[self.currentIndex])#
-            self.currentIndex += 1
-        else:
-            self.currentIndex = 0

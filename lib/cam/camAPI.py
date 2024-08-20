@@ -1,4 +1,5 @@
-import time
+import cv2
+import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QImage
 from lib.cam.nncam import nncam
@@ -31,7 +32,8 @@ class CameraMiddleware(QObject):
         self.snapshot = None
         self.targetFromSnap = False
 
-        self._stream = None  # Camera stream ptr (protected)
+        self._streamBuf = None
+        self._snapBuf = None
         self.RESOLUTION = 2  # 1824x1216
 
     def openCamera(self):
@@ -50,7 +52,8 @@ class CameraMiddleware(QObject):
             self.device.put_Option(nncam.NNCAM_OPTION_BYTEORDER, 0)  # Qimage use RGB byte order
             self.device.put_AutoExpoEnable(0)
 
-            self._stream = bytes(nncam.TDIBWIDTHBYTES(self.imgWidth * 24) * self.imgHeight)
+            self._streamBuf = bytes(nncam.TDIBWIDTHBYTES(self.imgWidth * 24) * self.imgHeight)
+            self._snapBuf = bytes(nncam.TDIBWIDTHBYTES(self.imgWidth * 24) * self.imgHeight)
             self.expoUpdateEvt()
 
             try:
@@ -71,7 +74,7 @@ class CameraMiddleware(QObject):
             self.device.Close()
 
         self.device = None
-        self._stream = None
+        self._streamBuf = None
 
     @staticmethod
     def eventCallBack(nEvent, self):
@@ -97,18 +100,18 @@ class CameraMiddleware(QObject):
         [相机类] 向UI线程推送动态帧
         """
         try:
-            self.device.PullImageV3(self._stream, 0, 24, 0, None)
+            self.device.PullImageV3(self._streamBuf, 0, 24, 0, None)
         except nncam.HRESULTException:
             pass
         else:
             self.frame = QImage(
-                self._stream, self.imgWidth, self.imgHeight, QImage.Format.Format_RGB888
+                self._streamBuf, self.imgWidth, self.imgHeight, QImage.Format.Format_RGB888
             )
             self.frameUpdate.emit()
 
     def stillFrameEvt(self):
         """
-        (WIP) [相机类] 向UI线程推送已抓取静态帧
+        [相机类] 向UI线程推送已抓取静态帧
         """
         info = nncam.NncamFrameInfoV3()
         try:
@@ -117,15 +120,12 @@ class CameraMiddleware(QObject):
             pass
         else:
             if info.width > 0 and info.height > 0:
-                buf = bytes(nncam.TDIBWIDTHBYTES(info.width * 24) * info.height)
                 try:
-                    self.device.PullImageV3(buf, 1, 24, 0, info)
+                    self.device.PullImageV3(self._snapBuf, 1, 24, 0, info)
                 except nncam.HRESULTException:
                     pass
                 else:
-                    self.snapshot = QImage(
-                        buf, info.width, info.height, QImage.Format.Format_RGB888
-                    )
+                    self.snapshot = np.frombuffer(self._snapBuf, np.uint8).reshape((info.height, info.width, 3))
                     self.snapUpdate.emit()
 
     def expoUpdateEvt(self):

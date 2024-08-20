@@ -5,47 +5,62 @@ import cv2
 import cupy as cp
 import numpy as np
 from pathlib import Path
-from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, QSize, QRect, qInstallMessageHandler
-from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon, QImage, QPainter, QPen
+from queue import Queue
+from PyQt6.QtCore import Qt, QSignalBlocker, pyqtSignal, pyqtSlot, QSize, QRect, qInstallMessageHandler, QTimer
+from PyQt6.QtGui import QGuiApplication, QPixmap, QIcon
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QStatusBar, \
-    QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, QTabWidget, \
+    QGridLayout, QVBoxLayout, QHBoxLayout, QGroupBox, \
     QFileDialog, QMessageBox, \
-    QLabel, QPushButton, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox, QProgressBar
+    QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QProgressBar
 from lib.utils.utils import Utils, ImgProcess
+from lib.utils.autoDetect import FeaturesDetect, FeaturesSort, \
+    FrameGeneratorWorker, HoloGeneratorWorker
 from lib.holo.libHoloAlgmGPU import WCIA
 from lib.holo.libHoloEssential import Holo, HoloCalcWorker
 from lib.cam.camAPI import CameraMiddleware
-
+from multiprocessing import Pipe
 
 class MainWindow(QMainWindow):
     """
     [主窗口类] 包含预览与控制面板
 
-    :var pendingImg: 预处理前的图像
+    :var snapImg: 现场的图像
     :var targetImg: 全息图目标图像
     :var holoU: 全息图复光场
     :var holoImg: 全息图(相位项转位图)
     :var holoImgRotated: 针对LCOS旋转方向的全息图
+    :var zerothOrderPosition: 激光零级位置
     """
     holoImgReady = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
 
-        self.pendingImg = None
+        self.snapImg = None
         self.targetImg = None
         self.holoImg = None
         self.holoU = None
         self.holoImgRotated = None
+        self.zerothOrderPosition = (844, 674)
+        self._frameGenerator = None
+        self._holoGenerator = None
+        self._imgSaver = None
+        self._framePipeReceiver, self._framePipeSender = Pipe()
+        self._holoPipeReceiver, self._holoPipeSender = Pipe()
+        self._imgQueue = Queue()
+        self._imgPlayTimer = QTimer()
+        self._imgPlayTimer.timeout.connect(self.showNext)
         self._snapAsTarget = False
+        self._snapIsSave = False
+        self._snapIsDisp = False
         self._uniList = []
         self._effiList = []
         self._RMSEList = []
 
         # 相机实例通信
         self.cam = CameraMiddleware()
-        self.cam.frameUpdate.connect(lambda: self.camPreview.setPixmap(self.cam.frame))
-        self.cam.snapUpdate.connect(self.snapRefreshEvent)
+        self.cam.frameUpdate.connect(self.frameRefreshEvent)
+        self.cam.snapUpdate.connect(self.snapEvent)
         self.cam.expoUpdate.connect(self.expTimeUpdatedEvent)
 
         # 副屏实例通信
@@ -68,7 +83,7 @@ class MainWindow(QMainWindow):
 
         # 相机功能区
         self.snapBtn = QPushButton('抓图')
-        self.snapBtn.clicked.connect(self.snapImg)
+        self.snapBtn.clicked.connect(self.snapAndSave)
         self.snapBtn.setEnabled(False)
 
         expTimeText = QLabel("曝光 (ms)")
@@ -103,7 +118,6 @@ class MainWindow(QMainWindow):
         self.initPhaseSel = QComboBox()
         self.initPhaseSel.addItem(f"随机")
         self.initPhaseSel.addItem(f"目标光场IFFT")
-        self.initPhaseSel.addItem(f"(WIP) 带限初始相位")
         self.initPhaseSel.setEnabled(False)
 
         maxIterNumText = QLabel("最大迭代")
@@ -113,10 +127,8 @@ class MainWindow(QMainWindow):
         self.maxIterNumInput.setValue(40)
         self.maxIterNumInput.setEnabled(False)
 
-        iterTargetText = QLabel("终止迭代条件（%）")
-
-        self.iterTargetSel = QComboBox()
-        self.iterTargetSel.addItem(f"均方根误差 <=")
+        iterTargetText = QLabel("终止迭代")
+        iterTargetText2 = QLabel("RMSE(%) ≤")
 
         self.iterTargetInput = QDoubleSpinBox()
         self.iterTargetInput.setRange(0, 100)
@@ -130,9 +142,9 @@ class MainWindow(QMainWindow):
         holoSetLayout.addWidget(self.initPhaseSel, 1, 2, 1, 4)
         holoSetLayout.addWidget(maxIterNumText, 2, 0, 1, 2)
         holoSetLayout.addWidget(self.maxIterNumInput, 2, 2, 1, 4)
-        holoSetLayout.addWidget(iterTargetText, 3, 0, 1, 6)
-        holoSetLayout.addWidget(self.iterTargetSel, 4, 0, 1, 4)
-        holoSetLayout.addWidget(self.iterTargetInput, 4, 4, 1, 2)
+        holoSetLayout.addWidget(iterTargetText, 3, 0, 1, 2)
+        holoSetLayout.addWidget(iterTargetText2, 3, 2, 1, 2)
+        holoSetLayout.addWidget(self.iterTargetInput, 3, 4, 1, 2)
         holoSetLayout.setColumnStretch(0, 1)
         holoSetLayout.setColumnStretch(1, 1)
         holoSetLayout.setColumnStretch(2, 1)
@@ -144,9 +156,7 @@ class MainWindow(QMainWindow):
         holoSetGroupBox.setLayout(holoSetLayout)
 
         # 输入功能区
-        singleCalcText = QLabel("单次计算")
-
-        openTargetFileBtn = QPushButton('新的目标图...')
+        openTargetFileBtn = QPushButton('打开目标图...')
         openTargetFileBtn.clicked.connect(self.openTargetImg)
 
         openHoloFileBtn = QPushButton('已有全息图...')
@@ -156,29 +166,31 @@ class MainWindow(QMainWindow):
         inputTipsText.setStyleSheet("color:#999")
         inputTipsText.setWordWrap(True)
 
-        self.calcHoloBtn = QPushButton(QIcon(QPixmap('../res/svg/calculator.svg')), ' 计算全息图')
+        singleCalcText = QLabel("单次计算")
+
+        self.calcHoloBtn = QPushButton('计算全息图')
         self.calcHoloBtn.clicked.connect(self.calcHoloImg)
         self.calcHoloBtn.setEnabled(False)
 
-        self.saveHoloBtn = QPushButton(QIcon(QPixmap('../res/svg/download.svg')), ' 保存全息图...')
+        self.saveHoloBtn = QPushButton('保存全息图...')
         self.saveHoloBtn.clicked.connect(self.saveHoloImg)
         self.saveHoloBtn.setEnabled(False)
 
         autoCalcText = QLabel("自动计算")
 
-        self.snapFromCamBtn = QPushButton('从相机捕获')
-        self.snapFromCamBtn.clicked.connect(self.snapFromCam)
-        self.snapFromCamBtn.setEnabled(False)
+        self.autoCalcBtn = QPushButton('从相机捕获')
+        self.autoCalcBtn.clicked.connect(self.autoCalcHoloImg)
+        self.autoCalcBtn.setEnabled(False)
 
         calcLayout = QGridLayout()
-        calcLayout.addWidget(singleCalcText, 0, 0, 1, 2)
-        calcLayout.addWidget(openTargetFileBtn, 1, 0, 1, 1)
-        calcLayout.addWidget(openHoloFileBtn, 1, 1, 1, 1)
-        calcLayout.addWidget(inputTipsText, 2, 0, 1, 2)
+        calcLayout.addWidget(openTargetFileBtn, 0, 0, 1, 1)
+        calcLayout.addWidget(openHoloFileBtn, 0, 1, 1, 1)
+        calcLayout.addWidget(inputTipsText, 1, 0, 1, 2)
+        calcLayout.addWidget(singleCalcText, 2, 0, 1, 2)
         calcLayout.addWidget(self.calcHoloBtn, 3, 0, 1, 1)
         calcLayout.addWidget(self.saveHoloBtn, 3, 1, 1, 1)
         calcLayout.addWidget(autoCalcText, 4, 0, 1, 2)
-        calcLayout.addWidget(self.snapFromCamBtn, 5, 0, 1, 2)
+        calcLayout.addWidget(self.autoCalcBtn, 5, 0, 1, 2)
         calcLayout.setColumnStretch(0, 1)
         calcLayout.setColumnStretch(1, 1)
 
@@ -188,28 +200,15 @@ class MainWindow(QMainWindow):
         # 目标图显示区域
         self.targetImgPreview = QLabel()
         self.targetImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
-        self.targetImgPreview.setFixedSize(180, 180)
+        self.targetImgPreview.setText("从输入模块载入已有目标图 \n或 [从相机捕获]")
+        self.targetImgPreview.setFixedSize(240, 240)
 
         targetImgHLayout = QHBoxLayout()
         targetImgHLayout.addWidget(self.targetImgPreview)
         targetImgVLayout = QVBoxLayout()
         targetImgVLayout.addLayout(targetImgHLayout)
-        targetImgGroupBox = QGroupBox("目标图")
+        targetImgGroupBox = QGroupBox("目标图 / 重建预览")
         targetImgGroupBox.setLayout(targetImgVLayout)
-
-        # 重建光场仿真显示区域
-        self.reconstructImgPreview = QLabel()
-        self.reconstructImgPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
-        self.reconstructImgPreview.setFixedSize(180, 180)
-
-        reconstructImgHLayout = QHBoxLayout()
-        reconstructImgHLayout.addWidget(self.reconstructImgPreview)
-        reconstructImgVLayout = QVBoxLayout()
-        reconstructImgVLayout.addLayout(reconstructImgHLayout)
-        reconstructImgGroupBox = QGroupBox("重建预览")
-        reconstructImgGroupBox.setLayout(reconstructImgVLayout)
 
         ctrlAreaLayout = QVBoxLayout()
         ctrlAreaLayout.addWidget(camCtrlGroupBox)
@@ -217,14 +216,14 @@ class MainWindow(QMainWindow):
         ctrlAreaLayout.addWidget(calcGroupBox)
         ctrlAreaLayout.addStretch(1)
         ctrlAreaLayout.addWidget(targetImgGroupBox)
-        ctrlAreaLayout.addWidget(reconstructImgGroupBox)
 
         ctrlArea = QWidget()
         ctrlArea.setLayout(ctrlAreaLayout)
 
         # ==== 显示区域 ====
         # 相机预览区域
-        self.camPreview = VideoFrameWidget()
+        self.camPreview = QLabel()
+        self.camPreview.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.camPreview.setMinimumSize(480, 360)
 
         camPreviewHLayout = QHBoxLayout()
@@ -237,16 +236,21 @@ class MainWindow(QMainWindow):
         # ==== 状态栏 ====
 
         self.progressBar = QProgressBar()
-        self.progressBar.setStyleSheet("QProgressBar {min-width: 100px; max-width: 200px; margin-right:5px}")
+        self.progressBar.setStyleSheet("QProgressBar {min-width: 100px; max-width: 300px; margin-right:5px}")
         self.progressBar.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.secondStatusInfo = QLabel()
         self.secondStatusInfo.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.secondStatusInfo.setStyleSheet("QLabel {min-width: 100px; margin-right:5px}")
 
+        self.setZerothOrderBtn = QPushButton(" 校准 SLM 中心坐标 ")
+        self.setZerothOrderBtn.clicked.connect(self.setZerothOrder)
+        self.setZerothOrderBtn.setEnabled(False)
+
         self.statusBar = QStatusBar()
         self.statusBar.addPermanentWidget(self.secondStatusInfo)
         self.statusBar.addPermanentWidget(self.progressBar)
+        self.statusBar.addPermanentWidget(self.setZerothOrderBtn)
 
         self.statusBar.showMessage(f"就绪")
         self.secondStatusInfo.setText(f"等待输入")
@@ -275,7 +279,7 @@ class MainWindow(QMainWindow):
                 widget.close()
 
         self.cam.closeCamera()
-
+        self.stopThreads()
         logHandler.info(f"Bye.")
         event.accept()
 
@@ -309,24 +313,29 @@ class MainWindow(QMainWindow):
 
                 self.cam.expoUpdateEvt()
 
+        self.setZerothOrderBtn.setEnabled(not self.setZerothOrderBtn.isEnabled())
         self.snapBtn.setEnabled(not self.snapBtn.isEnabled())
-        self.snapFromCamBtn.setEnabled(not self.snapFromCamBtn.isEnabled())
         self.expTimeInput.setEnabled(not self.expTimeInput.isEnabled())
 
-    def snapImg(self):
+    def snapAndSave(self):
         """
         [UI操作] 点击抓图
         """
         if self.cam.device:
             self.cam.device.Snap(self.cam.RESOLUTION)
+            self._snapIsSave = True
+            self._snapAsTarget = False
+            self._snapIsDisp = False
 
-    def snapFromCam(self):
+    def snapAsTarget(self, isSave):
         """
         [UI操作] 点击从相机捕获
         """
         if self.cam.device:
-            self._snapAsTarget = True
             self.cam.device.Snap(self.cam.RESOLUTION)
+            self._snapAsTarget = True
+            self._snapIsSave = isSave
+            self._snapIsDisp = False
 
     def expTimeSet(self, value):
         """
@@ -341,8 +350,11 @@ class MainWindow(QMainWindow):
         [UI操作] 点击载入已有图像
         """
         try:
-            imgDir, imgType = QFileDialog.getOpenFileName(
-                self, "打开图片", "", "图像文件(*.jpg *.png *.tif *.bmp);;所有文件(*)"
+            imgDir, _ = QFileDialog.getOpenFileName(
+                self,
+                "打开图片",
+                "",
+                "图像文件(*.jpg *.png *.tif *.bmp)",
             )
         except Exception as err:
             QMessageBox.critical(self, '错误', f'载入图像失败：\n{err}')
@@ -350,7 +362,7 @@ class MainWindow(QMainWindow):
         else:
             if imgDir is not None and imgDir != '':
                 try:
-                    self.pendingImg = ImgProcess.loadImg(imgDir)
+                    self.targetImg = ImgProcess.loadImg(imgDir)
                 except IOError:
                     QMessageBox.critical(self, '错误', '文件打开失败')
                     logHandler.error(f"Fail to load image: I/O Error")
@@ -411,8 +423,7 @@ class MainWindow(QMainWindow):
         [UI操作] 计算全息图
         """
         # 已载入图像
-        if self.pendingImg is not None:
-            self.targetImg = self.pendingImg
+        if self.targetImg is not None:
 
             logHandler.info(f"Start Calculation.")
             self.statusBar.showMessage(f"开始计算...")
@@ -470,6 +481,9 @@ class MainWindow(QMainWindow):
             self.saveHoloBtn.setEnabled(False)
 
     def calcResultUpdateEvent(self, u, phase):
+        """
+        [UI事件] 全息图计算结果后处理
+        """
         self.secondStatusInfo.setText(f"类型转换...")
         self.progressBar.setRange(0, 10)
         self.progressBar.setValue(5)
@@ -485,9 +499,7 @@ class MainWindow(QMainWindow):
 
         self.secondStatusInfo.setText(f"发送全息图...")
         self.progressBar.setValue(7)
-        # 在预览窗口显示计算好的全息图
-        ImgProcess.cvImg2QPixmap(self.holoImgPreview, self.holoImg)
-        # 向副屏发送计算好的全息图
+
         self.holoImgReady.emit(self.holoImgRotated)
         logHandler.info(f"Image has been transferred to the second monitor.")
 
@@ -497,45 +509,29 @@ class MainWindow(QMainWindow):
 
         self.secondStatusInfo.setText(f"进行性能统计...")
         self.progressBar.setValue(9)
+
         # 性能估计
-        iteration = len(self._uniList)
+        iteration = len(self._RMSEList)
         duration = round(tEnd - self.tStart, 2)
-        uniformity = self._uniList[-1]
-        efficiency = self._effiList[-1]
         RMSE = self._RMSEList[-1]
 
         self.secondStatusInfo.setText(f"完成")
         self.progressBar.setValue(10)
         logHandler.info(f"Finish Calculation.")
-        logHandler.info(
-            f"Iteration={iteration}, Duration={duration}s, "
-            f"uniformity={uniformity}, efficiency={efficiency}, RMSE={RMSE}"
-        )
         self.statusBar.showMessage(
             f"计算完成。迭代{iteration}次，时长 {duration}s，"
-            f"均匀度{round(uniformity, 4)}，光场利用效率{round(efficiency, 4)}, "
             f"RMSE={round(RMSE, 4)}"
         )
 
-    def snapRefreshEvent(self):
+    def snapEvent(self):
         """
         [UI事件] 抓图
         """
         if self._snapAsTarget:
-            ptr = self.cam.snapshot.bits()
-            ptr.setsize(self.cam.snapshot.bytesPerLine() * self.cam.snapshot.height())
-            height = self.cam.snapshot.height()
-            width = self.cam.snapshot.width()
+            self.snapImg = cv2.cvtColor(self.cam.snapshot, cv2.COLOR_RGB2GRAY)
 
-            # 创建NumPy数组
-            image_array = np.frombuffer(ptr, dtype=np.uint8).reshape((height, width, 3))
-
-            self.pendingImg = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-
-            self.pendingImg = ImgProcess().createGaussianBeamMask(self.pendingImg, 6)
-
-            self.imgLoadedEvent(f"Snap", None)
-
+            if self._snapIsDisp:
+                self.imgLoadedEvent('Snap', None)
             self._snapAsTarget = False
 
             filepath = f"../pics/snap/{time.strftime('%Y%m%d%H%M%S')}-asTarget.jpg"
@@ -544,34 +540,42 @@ class MainWindow(QMainWindow):
 
         Utils.folderPathCheck(filepath)
 
-        self.cam.snapshot.save(f"{filepath}")
-        logHandler.info(f"Snapshot saved as '{filepath}'")
-        self.statusBar.showMessage(f"截图已保存至 '{filepath}'")
+        if self._snapIsSave:
+            cv2.imwrite(f"{filepath}", self.cam.snapshot)
+            logHandler.info(f"Snapshot saved as '{filepath}'")
+            self.statusBar.showMessage(f"截图已保存至 '{filepath}'")
+
+    def frameRefreshEvent(self):
+        """
+        [UI事件] 刷新相机预览窗口
+        """
+        preview = self.cam.frame.scaled(
+            self.camPreview.width(), self.camPreview.height(),
+            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation
+        )
+        self.camPreview.setPixmap(QPixmap.fromImage(preview))
 
     def imgLoadedEvent(self, targetDir, holoDir):
         """
         [UI事件] 载入图像后界面刷新
         """
         if targetDir is not None and targetDir != '':  # 载入目标图
-            if self.pendingImg is not None:
-                imgRes = f"{self.pendingImg.shape[1]}x{self.pendingImg.shape[0]}"
+            if self.targetImg is not None:
+                imgRes = f"{self.targetImg.shape[1]}x{self.targetImg.shape[0]}"
                 logHandler.info(
                     f"Image Loaded. Dir={targetDir}, Resolution={imgRes}"
                 )
 
                 self.statusBar.showMessage(f"已加载图像{targetDir}，分辨率{imgRes}")
                 self.holoImg = None
-                ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.pendingImg)
-                ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, None)
-
-                self.reconstructImgPreview.setText(f"计算或载入全息图后查看结果")
+                ImgProcess.cvImg2QPixmap(self.targetImgPreview, self.targetImg)
 
                 self.calcHoloBtn.setEnabled(True)
                 self.holoAlgmSel.setEnabled(True)
                 self.initPhaseSel.setEnabled(True)
                 self.maxIterNumInput.setEnabled(True)
-                self.iterTargetSel.setEnabled(True)
                 self.iterTargetInput.setEnabled(True)
+                self.autoCalcBtn.setEnabled(True)
                 self.secondStatusInfo.setText(f"就绪")
                 self.progressBar.reset()
                 self.progressBar.setValue(0)
@@ -585,26 +589,41 @@ class MainWindow(QMainWindow):
                 )
 
                 self.statusBar.showMessage(f"已加载图像{holoDir}，分辨率{imgRes}")
-                self.pendingImg = None
-                ImgProcess.cvImg2QPixmap(self.targetImgPreview, None)
+                self.targetImg = None
                 self.reconstructResult(self.holoU, 50, 532e-6)
 
-                self.targetImgPreview.setText("从输入模块载入已有目标图 \n或打开相机后 [从相机捕获]")
-
-                self.holoImgRotated = cv2.rotate(
-                    cv2.flip(self.holoImg, 1),
-                    cv2.ROTATE_90_COUNTERCLOCKWISE
-                )
+                self.holoImgRotated = cv2.rotate(self.holoImg, cv2.ROTATE_90_CLOCKWISE)
                 self.holoImgReady.emit(self.holoImgRotated)
 
                 self.calcHoloBtn.setEnabled(False)
                 self.holoAlgmSel.setEnabled(False)
                 self.initPhaseSel.setEnabled(False)
                 self.maxIterNumInput.setEnabled(False)
-                self.iterTargetSel.setEnabled(False)
                 self.iterTargetInput.setEnabled(False)
+                self.autoCalcBtn.setEnabled(False)
         else:
             logHandler.warning(f"No image loaded. ")
+
+    def showNext(self):
+        try:
+            (holoImg, index) = self._imgQueue.get()
+        except Exception as e:
+            print(e)
+        else:
+            if self._imgQueue.qsize() == 0:
+                self._imgPlayTimer.stop()
+                self._framePipeReceiver = None
+                self._framePipeSender = None
+                self._holoPipeReceiver = None
+                self._holoPipeSender = None
+                self.statusBar.showMessage(f"显示完成")
+                self.autoCalcBtn.setText("从相机捕获")
+                self.autoCalcBtn.clicked.disconnect()
+                self.autoCalcBtn.clicked.connect(self.autoCalcHoloImg)
+            else:
+                self.holoImgReady.emit(holoImg)
+                self.statusBar.showMessage(f"正在显示第{index}帧")
+                QApplication.processEvents()
 
     def reconstructResult(self, holoU, d: int, wavelength: float):
         """
@@ -618,7 +637,7 @@ class MainWindow(QMainWindow):
         reconstructU = Holo.reconstruct(holoU, d, wavelength)
         reconstructA = Holo.normalize(np.abs(reconstructU)) * 255
 
-        ImgProcess.cvImg2QPixmap(self.reconstructImgPreview, reconstructA.astype("uint8"))
+        ImgProcess.cvImg2QPixmap(self.targetImgPreview, reconstructA.astype("uint8"))
 
     def expTimeUpdatedEvent(self):
         """
@@ -629,30 +648,170 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.expTimeInput):
             self.expTimeInput.setValue(int(expTime / 1000))
 
-    def deviceUpdatedEvent(self):
-        """
-        [UI事件] 串口设备侦测
-        """
-        try:
-            self.laser.listComPorts()
-        except IndexError:
-            logHandler.warning(f"No available COM ports found.")
+    def setZerothOrder(self):
+        message = QMessageBox.warning(
+            self,
+            '校准 SLM 中心坐标',
+            f'校准 SLM 中心坐标有助于匹配视场和全息图之间的位置关系。在调整光路后，务必校准 SLM 的中心坐标。\n\n'
+            f'校准前请完成以下准备步骤：\n'
+            f'1. 取下滤光片，放置反射镜，确认物镜倍率为50x及以上；\n'
+            f'2. 关闭明场灯，确认SLM未加载任何图像；\n'
+            f'3. 打开激光，调整焦距、功率和曝光时间，使零级光清晰可见。\n'
+            f'将零级光位置调节得尽量靠近视场中心，有助于最大化成像区域有效面积。\n\n'
+            f'完成上述步骤后点击 [OK]，进入下一步。',
+            (QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok),
+            QMessageBox.StandardButton.Cancel
+        )
+
+        if message == QMessageBox.StandardButton.Ok:
+            self.snapAsTarget(False)
             QMessageBox.warning(
                 self,
-                '警告',
-                f'未发现可用端口，无法连接至激光器控制盒。\n'
-                f'请尝试重新连接USB线，并确认端口选择正确、驱动安装正确或未被其他程序占用。\n'
-                f'若实验设备无需使用带通信功能的激光器控制盒，请忽略本消息。'
+                '准备识别',
+                f'程序即将开始识别中心坐标。识别期间请保持平台稳定，勿操作平台。\n'
+                f'准备好后点击 [OK]'
             )
-            self.laserPortSel.addItem(f"未发现可用端口")
-        else:
-            logHandler.info(f"Detected COM port(s):")
-            for i in range(len(self.laser.portList)):
-                logHandler.info(f"{self.laser.portList[i]}")
-                self.laserPortSel.addItem(f"{self.laser.portList[i]}")
+            if self.snapImg is not None:
+                try:
+                    circles = FeaturesDetect.detectCircles(self.snapImg)
+                except TypeError:
+                    QMessageBox.critical(
+                        self,
+                        '错误',
+                        f'未识别到零级光斑'
+                    )
+                    return -1
+                else:
+                    self.zerothOrderPosition = circles[0][:2]
+                    QMessageBox.information(
+                        self,
+                        '成功',
+                        f'中心坐标更新为{self.zerothOrderPosition}'
+                    )
+                    logHandler.info(f"zerothOrderPosition at {self.zerothOrderPosition}")
+                    return 0
+            else:
+                QMessageBox.critical(
+                    self,
+                    '错误',
+                    f'未识别到零级光斑'
+                )
+                return -1
 
-            self.laserPortSel.setEnabled(True)
-            self.connectLaserBtn.setEnabled(True)
+    def autoCalcHoloImg(self):
+
+        def startThreads():
+            self._frameGenerator.start()
+            self._holoGenerator.start()
+
+            self._imgPlayTimer.start(50)
+
+            self._framePipeSender.close()
+            self._framePipeReceiver.close()
+            self._holoPipeSender.close()
+
+            while True:
+                try:
+                    (phase, index) = self._holoPipeReceiver.recv()
+                    holoImg = cp.asnumpy(Holo.genHologram(phase))
+                    holoImgRotated = cv2.rotate(holoImg, cv2.ROTATE_90_CLOCKWISE)
+                    self._imgQueue.put((holoImgRotated, index))
+                    self.secondStatusInfo.setText(f"计算第{index}帧")
+                    QApplication.processEvents()
+                except EOFError:
+                    self._holoPipeReceiver.close()
+                    self.progressBar.setRange(0, 100)
+                    self.progressBar.setValue(100)
+                    self.secondStatusInfo.setText(f"计算已完成")
+                    break
+
+        self.snapAsTarget(False)
+
+        message = QMessageBox.warning(
+            self,
+            '准备识别',
+            f'程序即将开始识别图像中目标位置。识别期间请保持平台稳定，勿操作平台。\n'
+            f'准备好后点击 [OK]',
+            (QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok),
+            QMessageBox.StandardButton.Ok
+        )
+
+        if message == QMessageBox.StandardButton.Ok:
+            if all([self._framePipeReceiver, self._framePipeSender, self._holoPipeReceiver, self._holoPipeSender]):
+                pass
+            else:
+                self._framePipeReceiver, self._framePipeSender = Pipe()
+                self._holoPipeReceiver, self._holoPipeSender = Pipe()
+
+            self.progressBar.setRange(0, 100)
+            self.progressBar.setValue(0)
+            self.autoCalcBtn.setText("中止")
+            self.autoCalcBtn.clicked.disconnect()
+            self.autoCalcBtn.clicked.connect(self.stopThreads)
+
+            center = self.zerothOrderPosition
+
+            currentImg = FeaturesDetect.cutImg(self.snapImg, center)
+            # currentImg = FeaturesDetect.cutImg(cv2.imread('3.jpg', cv2.IMREAD_GRAYSCALE), center)
+
+            # 检测特征点
+            try:
+                currentPoints = FeaturesDetect.detectCircles(currentImg)
+                targetPoints = FeaturesDetect.detectCircles(self.targetImg)
+
+            except TypeError:
+                QMessageBox.critical(
+                    self,
+                    '错误',
+                    f'未能识别到目标点或图像点\n'
+                )
+                self.stopThreads()
+                return -1
+
+            self.secondStatusInfo.setText("识别目标点...")
+            totalOrderA, _ = FeaturesSort(targetPoints, 0.1).calc()
+
+            self.secondStatusInfo.setText("匹配目标点...")
+            matchedPairs = FeaturesDetect.match(currentPoints, totalOrderA, 0.55, 2.2)
+
+            if len(currentPoints) < len(targetPoints):
+                self.statusBar.showMessage(f"{len(targetPoints)}个目标点，但视场中仅识别到{len(currentPoints)}个点，仅对上述点进行就近匹配")
+            else:
+                self.statusBar.showMessage(f"{len(targetPoints)}个目标点已全部完成就近匹配")
+
+            maxIterNum = self.maxIterNumInput.value()
+            iterTarget = self.iterTargetInput.value() * 0.01
+
+            self.secondStatusInfo.setText("计算路径帧...")
+
+            self._frameGenerator = FrameGeneratorWorker(matchedPairs, self._framePipeSender)
+
+            self._holoGenerator = HoloGeneratorWorker(
+                self._framePipeReceiver,
+                self._holoPipeSender,
+                maxIterNum,
+                iterTarget
+            )
+
+            self.progressBar.setRange(0,0)
+
+            startThreads()
+
+    def stopThreads(self):
+        self._frameGenerator.terminate()
+        self._holoGenerator.terminate()
+        self._imgPlayTimer.stop()
+        self._framePipeReceiver = None
+        self._framePipeSender = None
+        self._holoPipeReceiver = None
+        self._holoPipeSender = None
+        self.progressBar.setRange(0, 100)
+        self.progressBar.setValue(100)
+        self.secondStatusInfo.setText(f"计算已完成")
+        logHandler.warning("Calculation terminated")
+        self.autoCalcBtn.setText("从相机捕获")
+        self.autoCalcBtn.clicked.disconnect()
+        self.autoCalcBtn.clicked.connect(self.autoCalcHoloImg)
 
 
 class SecondMonitorWindow(QMainWindow):
@@ -667,6 +826,7 @@ class SecondMonitorWindow(QMainWindow):
         self._initUI()
 
     def _initUI(self):
+        self.setWindowTitle("Second Window")
         self.setWindowIcon(QIcon("../res/slm.ico"))
         # 隐藏任务栏按钮
         self.setWindowFlags(Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)
@@ -699,7 +859,7 @@ class SecondMonitorWindow(QMainWindow):
 
         :param object image:
         """
-        logHandler.info(f"Image has been received from the main window.")
+        logHandler.debug(f"Image has been received from the main window.")
         ImgProcess.cvImg2QPixmap(self.holoImgFullScn, image)
 
     def monitorDetection(self):
@@ -764,85 +924,6 @@ class SecondMonitorWindow(QMainWindow):
                     f"Check your connection, power status or screen configuration."
                 )
                 sys.exit()
-
-
-class VideoFrameWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.frame = QImage()
-        self.marks = []
-        self.currMark = None
-
-    def paintEvent(self, event):
-        # 获取绘图设备
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-
-        # 绘制视频帧
-        if not self.frame.isNull():
-            windowAspect = self.width() / self.height()
-            imageAspect = self.frame.width() / self.frame.height()
-
-            # 根据宽高比确定缩放比例
-            if windowAspect < imageAspect:
-                scaleFactor = self.width() / self.frame.width()
-            else:
-                scaleFactor = self.height() / self.frame.height()
-
-            # 计算缩放后的图像尺寸
-            scaledSize = QSize(
-                int(self.frame.width() * scaleFactor), int(self.frame.height() * scaleFactor)
-            )
-
-            # 缩放图像
-            pixmap = QPixmap.fromImage(
-                self.frame.scaled(
-                    scaledSize,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
-
-            # 计算图像绘制的起始位置以居中显示
-            x = (self.width() - pixmap.width()) // 2
-            y = (self.height() - pixmap.height()) // 2
-
-            # 绘制缩放后的图像
-            painter.drawPixmap(x, y, pixmap)
-
-            # 绘制标记
-            for mark in self.marks:
-                painter.setPen(QPen(Qt.GlobalColor.white, 2))  # 设置标记颜色和线宽
-                painter.drawRect(mark)
-
-            painter.end()
-        else:
-            painter.end()
-
-    def setPixmap(self, frame):
-        # 更新视频帧
-        self.frame = frame
-        self.repaint()  # 重绘整个窗口
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 在鼠标点击位置添加标记
-            self.marks.append(QRect(event.pos().x() - 10, event.pos().y() - 10, 20, 20))
-            self.repaint()  # 重绘标记
-
-        if event.button() == Qt.MouseButton.RightButton:
-            for mark in self.marks:
-                if mark.contains(event.pos()):
-                    self.currMark = mark
-                    break
-            else:  # 如果没有标记被选中，重置选中状态
-                self.currMark = None
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.RightButton and self.currMark:
-            self.marks.remove(self.currMark)
-            self.currMark = None  # 重置选中状态
-            self.update()  # 重绘窗口以反映变化
 
 
 if __name__ == '__main__':
